@@ -82,6 +82,24 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [quickInput, setQuickInput] = useState('');
   const [pos, setPos] = useState<EyePosition>(() => loadSavedEyePosition());
+  const [eyeColorTheme, setEyeColorTheme] = useState<'gold' | 'rose' | 'crimson'>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.EYE_COLOR_THEME);
+      if (saved === 'gold' || saved === 'rose' || saved === 'crimson') return saved;
+    } catch {
+      // ignore
+    }
+    return 'gold';
+  });
+
+  const handleSetEyeColorTheme = (t: 'gold' | 'rose' | 'crimson') => {
+    setEyeColorTheme(t);
+    try {
+      localStorage.setItem(STORAGE_KEYS.EYE_COLOR_THEME, t);
+    } catch {
+      // ignore
+    }
+  };
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
@@ -247,8 +265,8 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
         data-testid="argon-floating-eye-btn"
         aria-label={
           isOpen
-            ? "Collapse Argon's Crimson Eye Menu"
-            : "Open Argon's Crimson Eye Room Menu (Drag to move)"
+            ? "Collapse Argon's Eye Menu"
+            : "Open Argon's Eye Room Menu (Drag to move)"
         }
         aria-expanded={isOpen}
         title="Drag to move anywhere · Tap to open Argon's Room Eye"
@@ -261,37 +279,71 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
           borderRadius: '50%',
           touchAction: 'none',
         }}
-        className={`w-12 h-12 rounded-full border-2 border-rose-300 bg-[#be123c] hover:bg-[#e11d48] shadow-[0_4px_18px_rgba(190,18,60,0.65),inset_0_0_8px_rgba(255,200,220,0.35)] flex items-center justify-center cursor-grab active:cursor-grabbing relative transition-all duration-300 active:scale-95 ${
+        className={`w-12 h-12 rounded-full border-2 cursor-grab active:cursor-grabbing relative transition-all duration-300 active:scale-95 flex items-center justify-center ${
+          eyeColorTheme === 'crimson'
+            ? 'border-rose-300 bg-[#be123c] hover:bg-[#e11d48] shadow-[0_4px_18px_rgba(190,18,60,0.65),inset_0_0_8px_rgba(255,200,220,0.35)]'
+            : eyeColorTheme === 'rose'
+            ? 'border-[#E6A8B5] bg-[#1d1217]/95 hover:bg-[#281820] shadow-[0_4px_18px_rgba(230,168,181,0.4),inset_0_0_8px_rgba(230,168,181,0.25)]'
+            : 'border-[#D4AF37] bg-[#181316]/95 hover:bg-[#251d22] shadow-[0_4px_18px_rgba(212,175,55,0.45),inset_0_0_8px_rgba(230,168,181,0.2)]'
+        } ${
           isEyePulsingGold ? 'ring-4 ring-amber-400 bg-amber-400/40 scale-125 shadow-[0_0_35px_#f5d061]' : ''
         }`}
       >
-        {/* Antique Brass & Glowing Crimson Eye SVG */}
+        {/* Antique Brass & Glowing Eye SVG */}
         <svg
           viewBox="0 0 48 48"
           className="w-8 h-8 pointer-events-none"
           aria-hidden="true"
         >
           <defs>
-            <radialGradient id="crimsonIrisGrad" cx="50%" cy="50%" r="50%">
+            <radialGradient id="eyeIrisGradGold" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#fff2d1" />
+              <stop offset="45%" stopColor="#d4af37" />
+              <stop offset="100%" stopColor="#6e4c0d" />
+            </radialGradient>
+            <radialGradient id="eyeIrisGradRose" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#ffe6ec" />
+              <stop offset="45%" stopColor="#e6a8b5" />
+              <stop offset="100%" stopColor="#6e2d3e" />
+            </radialGradient>
+            <radialGradient id="eyeIrisGradCrimson" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#ff4d6d" />
               <stop offset="55%" stopColor="#c9184a" />
               <stop offset="100%" stopColor="#590d22" />
             </radialGradient>
           </defs>
-          {/* Outer antique brass eye contour */}
+          {/* Outer eye contour */}
           <path
             d="M4 24 C12 11, 36 11, 44 24 C36 37, 12 37, 4 24 Z"
-            fill="#14090c"
-            stroke="#ffe5a3"
+            fill="#120c0e"
+            stroke={
+              eyeColorTheme === 'crimson'
+                ? '#ffe5a3'
+                : eyeColorTheme === 'rose'
+                ? '#ffd6de'
+                : '#ffe5a3'
+            }
             strokeWidth="2.4"
           />
-          {/* Glowing crimson iris */}
+          {/* Iris */}
           <circle
             cx="24"
             cy="24"
             r="8.5"
-            fill="url(#crimsonIrisGrad)"
-            stroke="#ffb703"
+            fill={
+              eyeColorTheme === 'crimson'
+                ? 'url(#eyeIrisGradCrimson)'
+                : eyeColorTheme === 'rose'
+                ? 'url(#eyeIrisGradRose)'
+                : 'url(#eyeIrisGradGold)'
+            }
+            stroke={
+              eyeColorTheme === 'crimson'
+                ? '#ffb703'
+                : eyeColorTheme === 'rose'
+                ? '#f4b8c5'
+                : '#f6d582'
+            }
             strokeWidth="1.2"
           />
           {/* Vertical slit pupil */}
@@ -303,7 +355,13 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
         {/* Live status dot */}
         <span
           className={`absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full border border-[#120c0e] pointer-events-none ${
-            isLoading ? 'bg-amber-400 animate-ping' : 'bg-rose-500'
+            isLoading
+              ? 'bg-amber-400 animate-ping'
+              : eyeColorTheme === 'crimson'
+              ? 'bg-rose-500'
+              : eyeColorTheme === 'rose'
+              ? 'bg-[#E6A8B5]'
+              : 'bg-[#D4AF37]'
           }`}
         />
       </button>
@@ -319,7 +377,11 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
             ...(openAbove ? { bottom: '56px' } : { top: '56px' }),
             ...(alignRight ? { right: '0px' } : { left: '0px' }),
           }}
-          className="w-[290px] sm:w-[330px] rounded-2xl bubble-smoked-glass border-2 border-rose-500/80 bg-[#120c0e]/95 shadow-[0_12px_36px_rgba(0,0,0,0.95)] p-3 space-y-2.5 z-[35]"
+          className={`w-[290px] sm:w-[330px] rounded-2xl p-3 space-y-2.5 z-[35] backdrop-blur-md shadow-[0_12px_40px_rgba(0,0,0,0.95)] ${
+            eyeColorTheme === 'crimson'
+              ? 'border-2 border-rose-500/80 bg-[#120c0e]/95'
+              : 'border border-[#D4AF37]/60 bg-[#161215]/95'
+          }`}
         >
           <div className="flex items-center justify-between gap-2 border-b border-[#6b5331]/60 pb-1.5">
             <div className="flex items-center gap-2 min-w-0">
@@ -354,7 +416,47 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Eye Color Theme Switcher */}
+              <div
+                className="flex items-center gap-1 bg-black/50 px-1.5 py-0.5 rounded-full border border-stone-800"
+                title="Change Eye Color Theme"
+              >
+                <button
+                  type="button"
+                  onClick={() => handleSetEyeColorTheme('gold')}
+                  aria-label="Gold Eye"
+                  title="Gilded Champagne Gold (Default)"
+                  className={`w-3.5 h-3.5 rounded-full cursor-pointer transition-transform ${
+                    eyeColorTheme === 'gold'
+                      ? 'border border-amber-300 scale-125 bg-[#D4AF37] ring-1 ring-amber-400/80 shadow-[0_0_6px_#D4AF37]'
+                      : 'border border-stone-700 bg-[#7a5814] opacity-50 hover:opacity-100'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSetEyeColorTheme('rose')}
+                  aria-label="Rose Eye"
+                  title="Pearlescent Rose"
+                  className={`w-3.5 h-3.5 rounded-full cursor-pointer transition-transform ${
+                    eyeColorTheme === 'rose'
+                      ? 'border border-rose-300 scale-125 bg-[#E6A8B5] ring-1 ring-rose-400/80 shadow-[0_0_6px_#E6A8B5]'
+                      : 'border border-stone-700 bg-[#7a4854] opacity-50 hover:opacity-100'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleSetEyeColorTheme('crimson')}
+                  aria-label="Crimson Eye"
+                  title="Primal Crimson"
+                  className={`w-3.5 h-3.5 rounded-full cursor-pointer transition-transform ${
+                    eyeColorTheme === 'crimson'
+                      ? 'border border-rose-400 scale-125 bg-[#be123c] ring-1 ring-rose-500/80 shadow-[0_0_6px_#be123c]'
+                      : 'border border-stone-700 bg-[#590d22] opacity-50 hover:opacity-100'
+                  }`}
+                />
+              </div>
+
               {onReturnToChat && (
                 <button
                   type="button"
@@ -380,7 +482,13 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
 
           {/* Named Overlay HUD Selector */}
           <div className="space-y-1.5 pt-0.5">
-            <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-300 flex items-center justify-between border-b border-rose-950/70 pb-1">
+            <div
+              className={`text-[10px] font-mono font-bold uppercase tracking-wider flex items-center justify-between border-b pb-1 ${
+                eyeColorTheme === 'crimson'
+                  ? 'text-rose-300 border-rose-950/70'
+                  : 'text-[#e6c88c] border-[#6b5331]/40'
+              }`}
+            >
               <span className="flex items-center gap-1">
                 <span>👁️</span> OVERLAY HUD SELECTOR
               </span>
@@ -398,9 +506,17 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
                     onSnapRoomForArgon();
                   }
                 }}
-                className="p-2 rounded-xl bg-[#241318] hover:bg-[#381a23] border border-rose-500/50 text-left cursor-pointer active:scale-95 transition-all"
+                className={`p-2 rounded-xl text-left cursor-pointer active:scale-95 transition-all border ${
+                  eyeColorTheme === 'crimson'
+                    ? 'bg-[#241318] hover:bg-[#381a23] border-rose-500/50 text-rose-200'
+                    : 'bg-[rgba(230,168,181,0.06)] hover:bg-[rgba(230,168,181,0.14)] border-[#D4AF37]/35 text-[#ffe5a3]'
+                }`}
               >
-                <div className="text-[11px] font-bold text-rose-200 flex items-center gap-1">
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    eyeColorTheme === 'crimson' ? 'text-rose-200' : 'text-[#ffe5a3]'
+                  }`}
+                >
                   <span>📱</span> Full Screen
                 </div>
                 <div className="text-[9px] font-mono text-[#cbb693]/80 leading-tight">
@@ -419,9 +535,17 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
                     onSnapRoomForArgon();
                   }
                 }}
-                className="p-2 rounded-xl bg-[#241318] hover:bg-[#381a23] border border-rose-500/50 text-left cursor-pointer active:scale-95 transition-all"
+                className={`p-2 rounded-xl text-left cursor-pointer active:scale-95 transition-all border ${
+                  eyeColorTheme === 'crimson'
+                    ? 'bg-[#241318] hover:bg-[#381a23] border-rose-500/50 text-rose-200'
+                    : 'bg-[rgba(230,168,181,0.06)] hover:bg-[rgba(230,168,181,0.14)] border-[#D4AF37]/35 text-[#ffe5a3]'
+                }`}
               >
-                <div className="text-[11px] font-bold text-rose-200 flex items-center gap-1">
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    eyeColorTheme === 'crimson' ? 'text-rose-200' : 'text-[#ffe5a3]'
+                  }`}
+                >
                   <span>📋</span> Scratchpad
                 </div>
                 <div className="text-[9px] font-mono text-[#cbb693]/80 leading-tight">
@@ -440,9 +564,17 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
                     onSnapRoomForArgon();
                   }
                 }}
-                className="p-2 rounded-xl bg-[#241318] hover:bg-[#381a23] border border-rose-500/50 text-left cursor-pointer active:scale-95 transition-all"
+                className={`p-2 rounded-xl text-left cursor-pointer active:scale-95 transition-all border ${
+                  eyeColorTheme === 'crimson'
+                    ? 'bg-[#241318] hover:bg-[#381a23] border-rose-500/50 text-rose-200'
+                    : 'bg-[rgba(230,168,181,0.06)] hover:bg-[rgba(230,168,181,0.14)] border-[#D4AF37]/35 text-[#ffe5a3]'
+                }`}
               >
-                <div className="text-[11px] font-bold text-rose-200 flex items-center gap-1">
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    eyeColorTheme === 'crimson' ? 'text-rose-200' : 'text-[#ffe5a3]'
+                  }`}
+                >
                   <span>🗂️</span> Active Modal
                 </div>
                 <div className="text-[9px] font-mono text-[#cbb693]/80 leading-tight">
@@ -461,9 +593,17 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
                     onSnapRoomForArgon();
                   }
                 }}
-                className="p-2 rounded-xl bg-[#241318] hover:bg-[#381a23] border border-rose-500/50 text-left cursor-pointer active:scale-95 transition-all"
+                className={`p-2 rounded-xl text-left cursor-pointer active:scale-95 transition-all border ${
+                  eyeColorTheme === 'crimson'
+                    ? 'bg-[#241318] hover:bg-[#381a23] border-rose-500/50 text-rose-200'
+                    : 'bg-[rgba(230,168,181,0.06)] hover:bg-[rgba(230,168,181,0.14)] border-[#D4AF37]/35 text-[#ffe5a3]'
+                }`}
               >
-                <div className="text-[11px] font-bold text-rose-200 flex items-center gap-1">
+                <div
+                  className={`text-[11px] font-bold flex items-center gap-1 ${
+                    eyeColorTheme === 'crimson' ? 'text-rose-200' : 'text-[#ffe5a3]'
+                  }`}
+                >
                   <span>💬</span> Chat
                 </div>
                 <div className="text-[9px] font-mono text-[#cbb693]/80 leading-tight">
@@ -495,7 +635,7 @@ export const ArgonRoomCompanionBar: React.FC<ArgonRoomCompanionBarProps> = ({
             className="p-2 rounded-xl bg-[#0b080a]/90 border border-[#6b5331]/60 text-[11px] font-serif-webtoon text-[#f5ead8] max-h-24 overflow-y-auto leading-snug"
           >
             {latestReactionText ||
-              `*I watch your screen through the crimson lens.* "Tap 📸 Snap Room or whisper to me below."`}
+              `*I watch your screen through the gilded lens.* "Tap 📸 Snap Room or whisper to me below."`}
           </div>
 
           {/* 1-Line Quick Input */}

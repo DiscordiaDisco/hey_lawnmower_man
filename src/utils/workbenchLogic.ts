@@ -95,6 +95,7 @@ export const STORAGE_KEYS = {
   TOOL_PERMISSION_MATRIX: 'argon_tool_permission_matrix_v1',
   STICKER_TRANSPARENT_MIGRATED: 'argon_sticker_transparent_diecut_v2',
   FLOATING_EYE_POS: 'argon_floating_eye_pos_v1',
+  EYE_COLOR_THEME: 'argon_eye_color_theme_v1',
   TELEMETRY_LOCATION: 'argon_telemetry_location',
   TELEMETRY_LAST_WEATHER: 'argon_telemetry_last_weather',
   STICKER_LIBRARY: 'argon_sticker_library_v1',

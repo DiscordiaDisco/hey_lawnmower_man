@@ -914,6 +914,7 @@ test('Staff & Argon Tool Permission Matrix, ensureDefaultStaffAgents (Haiku & A 
   const migratedStaff = ensureDefaultStaffAgents([DEFAULT_STAFF_AGENTS[0]]);
   assert.ok(migratedStaff.some((a) => a.id === 'agent-haiku'));
   assert.ok(migratedStaff.some((a) => a.id === 'agent-monkey' && a.name === 'A Monkey'));
+  assert.ok(migratedStaff.some((a) => a.id === 'agent-carbon' && a.name === 'Carbon'));
 
   assert.equal(TOOL_PERMISSION_DEFINITIONS.length, 8);
   const argonAllowed = getAllowedToolsForEntity('argon', DEFAULT_TOOL_PERMISSION_MATRIX).map(
@@ -2161,15 +2162,20 @@ test('Standard User Persona: calculatePersonaCompletion, load/save, and context 
 
 test('ensureDefaultStaffAgents guarantees initialized triggerWords on all agents', () => {
   const seeded = ensureDefaultStaffAgents([]);
-  assert.equal(seeded.length, 2);
+  assert.equal(seeded.length, 3);
   const haiku = seeded.find((a) => a.id === 'agent-haiku');
   const monkey = seeded.find((a) => a.id === 'agent-monkey');
+  const carbon = seeded.find((a) => a.id === 'agent-carbon');
   assert.ok(haiku);
   assert.ok(monkey);
+  assert.ok(carbon);
   assert.ok(Array.isArray(haiku.triggerWords) && haiku.triggerWords.includes('treat'));
   assert.ok(Array.isArray(haiku.triggerWords) && haiku.triggerWords.includes('good boy'));
   assert.ok(Array.isArray(monkey.triggerWords) && monkey.triggerWords.includes('banana'));
   assert.ok(Array.isArray(monkey.triggerWords) && monkey.triggerWords.includes('chaos'));
+  assert.ok(Array.isArray(carbon.triggerWords) && carbon.triggerWords.includes('carbon'));
+  assert.ok(Array.isArray(carbon.triggerWords) && carbon.triggerWords.includes('bully'));
+  assert.ok(Array.isArray(carbon.triggerWords) && carbon.triggerWords.includes('ledger'));
 
   // Custom agent with missing triggerWords receives default name trigger
   const customList = ensureDefaultStaffAgents([
@@ -2286,6 +2292,29 @@ test('generateAmbientCameoAction generates in-character zero-token actions', () 
     reason: 'turn_pity',
   });
   assert.ok(monkeyPity.length > 10);
+
+  // Carbon trigger word & actions
+  const carbon = agents.find((a) => a.name === 'Carbon')!;
+  assert.ok(carbon);
+  const carbonBully = generateAmbientCameoAction({
+    agent: carbon,
+    reason: 'trigger_word',
+    triggerWord: 'bully',
+  });
+  assert.ok(carbonBully.includes('ledger') || carbonBully.includes('Hex'));
+  assert.ok(carbonBully.includes('*'));
+
+  const carbonCharger = generateAmbientCameoAction({
+    agent: carbon,
+    reason: 'charger_plugged',
+  });
+  assert.ok(carbonCharger.includes('Voltage') || carbonCharger.includes('audit'));
+
+  const carbonPity = generateAmbientCameoAction({
+    agent: carbon,
+    reason: 'turn_pity',
+  });
+  assert.ok(carbonPity.length > 10);
 });
 
 test('True Keyword-Triggered Lorebook Engine triggers matching drawers and keeps inactive ones at 0 tokens', () => {

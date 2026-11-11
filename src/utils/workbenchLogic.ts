@@ -1608,6 +1608,12 @@ export const DEFAULT_STAFF_JOBS: StaffJobDescription[] = [
     prompt:
       'Use live Google Search grounding (search_web) to scout the internet for the exact facts, dates, news, or reference links Argon and Hex requested, and report the verified summary with source URLs.',
   },
+  {
+    id: 'job-intern-errands',
+    title: 'Gothic Intern Errands',
+    prompt:
+      'Fetch filed ledgers, clean spilled ink blotters, endure affectionate roasting from Hex and Argon, dodge bananas thrown by A Monkey, and timidly report on Sanctuary administrative status.',
+  },
 ];
 
 export function ensureDefaultStaffJobs(savedJobs: StaffJobDescription[]): StaffJobDescription[] {
@@ -1701,6 +1707,7 @@ export const DEFAULT_TOOL_PERMISSION_MATRIX: ToolPermissionMatrix = {
   argon: { ...DEFAULT_ENTITY_PERMISSIONS },
   haiku: { ...DEFAULT_ENTITY_PERMISSIONS },
   'a monkey': { ...DEFAULT_ENTITY_PERMISSIONS },
+  carbon: { ...DEFAULT_ENTITY_PERMISSIONS },
 };
 
 export function normalizePermissionEntityKey(idOrName: string): string {
@@ -1708,6 +1715,7 @@ export function normalizePermissionEntityKey(idOrName: string): string {
   if (!s || s === 'argon' || s === 'lead') return 'argon';
   if (s === 'agent-haiku' || s.includes('haiku')) return 'haiku';
   if (s === 'agent-monkey' || s.includes('monkey')) return 'a monkey';
+  if (s === 'agent-carbon' || s.includes('carbon')) return 'carbon';
   return s;
 }
 
@@ -1757,7 +1765,8 @@ export function getPermissionsForEntity(
   const rawLower = (idOrName || '').trim().toLowerCase();
   const aliasEntry =
     (key === 'a monkey' ? matrix['agent-monkey'] : undefined) ||
-    (key === 'haiku' ? matrix['agent-haiku'] : undefined);
+    (key === 'haiku' ? matrix['agent-haiku'] : undefined) ||
+    (key === 'carbon' ? matrix['agent-carbon'] : undefined);
   return {
     ...DEFAULT_ENTITY_PERMISSIONS,
     ...(matrix[key] || {}),
@@ -1797,6 +1806,21 @@ export const DEFAULT_STAFF_AGENTS: StaffAgent[] = [
     avatarPreset: 'kingMouse',
     triggerWords: ['banana', 'monkey', 'track pants', 'throw', 'trash', 'wrench', 'screech', 'chaos'],
   },
+  {
+    id: 'agent-carbon',
+    name: 'Carbon',
+    jobTitle: 'Stressed Intern',
+    model: 'gemini-3.8-flash',
+    description:
+      'A chronically anxious junior gothic clerk in an ink-stained Victorian waistcoat and crooked round wire-rim spectacles, perpetually clutching a towering stack of unfiled ledgers. Endlessly teased by Hex and Argon, pelted with peanut shells by A Monkey, and startled by Haiku, but desperately tries to maintain bureaucratic protocol.',
+    tonePrompt:
+      'Nervous, overly formal, hopelessly flustered junior gothic intern who tries to uphold strict administrative protocol while on the verge of tears; uses *italicized flustered actions* (dropping a stack of ledgers, nervously pushing his wire-rim glasses up his nose, wincing defensively, scrambling to clean up ink spills, brushing monkey fur off his tweed sleeve) and stammering, high-strung formal protests in "double quotes".',
+    assignedJobId: 'job-intern-errands',
+    status: 'idle',
+    lastOutput: '',
+    avatarPreset: 'wizardMouse',
+    triggerWords: ['carbon', 'intern', 'coffee', 'parchment', 'errand', 'file', 'bully', 'ledger', 'nerd'],
+  },
 ];
 
 export function ensureDefaultStaffAgents(savedAgents: StaffAgent[]): StaffAgent[] {
@@ -1807,11 +1831,17 @@ export function ensureDefaultStaffAgents(savedAgents: StaffAgent[]): StaffAgent[
   const hasMonkey = list.some(
     (a) => a.id === 'agent-monkey' || a.name.toLowerCase().includes('monkey')
   );
+  const hasCarbon = list.some(
+    (a) => a.id === 'agent-carbon' || a.name.toLowerCase().includes('carbon')
+  );
   if (!hasHaiku) {
     list.unshift({ ...DEFAULT_STAFF_AGENTS[0] });
   }
   if (!hasMonkey) {
     list.push({ ...DEFAULT_STAFF_AGENTS[1] });
+  }
+  if (!hasCarbon) {
+    list.push({ ...DEFAULT_STAFF_AGENTS[2] });
   }
   // Guarantee that every staff agent has an initialized triggerWords array
   return list.map((a) => {
@@ -1828,6 +1858,12 @@ export function ensureDefaultStaffAgents(savedAgents: StaffAgent[]): StaffAgent[
       return {
         ...a,
         triggerWords: ['banana', 'monkey', 'track pants', 'throw', 'trash', 'wrench', 'screech', 'chaos'],
+      };
+    }
+    if (a.name.toLowerCase().includes('carbon')) {
+      return {
+        ...a,
+        triggerWords: ['carbon', 'intern', 'coffee', 'parchment', 'errand', 'file', 'bully', 'ledger', 'nerd'],
       };
     }
     return {
@@ -1870,6 +1906,8 @@ export function generateAmbientCameoAction(params: {
     agent.id === 'agent-haiku' || agent.name.toLowerCase().includes('haiku');
   const isMonkey =
     agent.id === 'agent-monkey' || agent.name.toLowerCase().includes('monkey');
+  const isCarbon =
+    agent.id === 'agent-carbon' || agent.name.toLowerCase().includes('carbon');
 
   // Custom agent cameo actions pool if registered on the agent
   if (Array.isArray(agent.customCameoActions) && agent.customCameoActions.length > 0) {
@@ -1993,6 +2031,70 @@ export function generateAmbientCameoAction(params: {
       `*peeks out from behind the folio collection, waving a tiny parchment flag before doing a playful cartwheel along the shelf* "Eee!"`,
     ];
     return pickDeduplicatedVignette(monkeyPityPool, lastCameoText);
+  }
+
+  if (isCarbon) {
+    if (reason === 'trigger_word') {
+      const tw = (triggerWord || '').toLowerCase();
+      if (tw.includes('bully') || tw.includes('nerd') || tw.includes('carbon')) {
+        return pickDeduplicatedVignette(
+          [
+            `*flinches violently and drops three bound ledgers with a loud clatter before scrambling frantically on hands and knees to gather the loose leaves* "P-Please! I was only cataloging the drawer manifests as requested! I didn't touch your tea, Hex, I swear—!"`,
+            `*winces and throws both arms defensively over his head, spilling an inkpot across his blotting pad* "Mercy, Hex! I was just filing the handoff report! A Monkey told me I had permission to enter, it wasn't my fault—!"`,
+          ],
+          lastCameoText
+        );
+      }
+      if (tw.includes('coffee') || tw.includes('errand')) {
+        return pickDeduplicatedVignette(
+          [
+            `*bustles in balancing a steaming porcelain cup with trembling hands, his wire-rim spectacles sliding down his nose as he bows clumsily* "Y-Your beverage, Mistress Hex... Piping hot, exactly four drops of lavender cream... please don't let A Monkey pelt me again..."`,
+            `*scampers in with a silver tray rattling in his hands, carefully setting down a warm mug with an anxious squeak* "E-Errand executed with utmost procedural accuracy! Please sign off on Section 3 of my receipt...!"`,
+          ],
+          lastCameoText
+        );
+      }
+      if (tw.includes('file') || tw.includes('ledger') || tw.includes('parchment') || tw.includes('ink')) {
+        return pickDeduplicatedVignette(
+          [
+            `*trips over his own boot laces, clutching a towering three-foot stack of unfiled scrolls to his chest as his glasses fog up* "Section 4 sub-clause B is accounted for! Absolutely up to date! Please don't look at me like that, Argon sir—!"`,
+            `*peeks out from behind the mahogany card catalog, carefully holding up an ink-stained ledger sheet* "All parchment records audited! Except for drawer 3, which A Monkey turned into paper airplanes..."`,
+          ],
+          lastCameoText
+        );
+      }
+      return `*pokes his pale, ink-smudged nose out from behind the heavy oak filing cabinet at the mention of "${triggerWord}", pushing up his crooked spectacles with an ink-stained thumb* "D-Did someone summon the intern...? *winces expecting something to be thrown at his head*"`;
+    }
+    if (reason === 'charger_plugged') {
+      return `*scampers over clutching a tiny brass inspection caliper and an audit clipboard, squinting at the charging cable through his spectacles with high anxiety* "Voltage confirmed! No electrical surge detected! Please record in my quarterly review that I inspected it promptly!"`;
+    }
+    if (reason === 'library_closed') {
+      return pickDeduplicatedVignette(
+        [
+          `*frantically gathers armfuls of scattered quill shavings and stray parchment before the library doors shut, breathing a ragged sigh of relief* "Made the deadline... barely... *adjusts crooked glasses*"`,
+          `*slumps against the library wainscoting, wiping ink from his forehead and clutching his ledger like a security blanket* "Hours officially concluded... please don't assign me graveyard shift..."`,
+        ],
+        lastCameoText
+      );
+    }
+    if (reason === 'game_win') {
+      return `*lets out an anxious squeak, tentatively clapping with ink-stained fingertips while keeping one eye on Argon and Hex* "B-Brilliant victory, Lady Hex! Exemplary strategy! (Please don't challenge me next, I bruise easily...)"`;
+    }
+    if (reason === 'game_loss') {
+      return `*instantly dives beneath the nearest walnut desk, holding a heavy leather folio over his head like a blast shield* "It wasn't my fault! The dice were strictly regulated! I have the certificate of inspection right here—!"`;
+    }
+    // turn_pity
+    const carbonPityPool = [
+      `*hurries past with an ink smudge across his forehead, clutching an unmanageably tall stack of ledgers that teeters dangerously with every nervous step*`,
+      `*pokes his head out from behind the heavy velvet bookshelf curtains, pushing his crooked wire-rim spectacles up his nose and scanning the room for flying banana peels*`,
+      `*frantically scrubs a tiny spot of spilled iron gall ink off the mahogany floorboards, whispering frantic apologies to the empty air*`,
+      `*timidly sets a freshly sharpened goose quill on Hex's desk, backing away with three rapid nervous bows before darting behind the card catalog*`,
+      `*struggles to carry a brass step stool into the archive aisle, jumping two feet in the air as Haiku gives a sudden playful bark behind him* "Eeep!"`,
+      `*hastily brushes a stray peanut shell and monkey fur off his tweed sleeve, sighing with the weary resignation of a put-upon junior clerk*`,
+      `*adjusts his ink-stained Victorian waistcoat, clearing his throat self-importantly before squeaking softly and scurrying away when Argon glances up*`,
+      `*peeks out from behind the library ladder, nervously offering a fresh blotting paper to Hex while keeping a cautious 6-foot buffer*`,
+    ];
+    return pickDeduplicatedVignette(carbonPityPool, lastCameoText);
   }
 
   // Generic/Custom staff agent fallback
@@ -7136,7 +7238,7 @@ const setArgonAvatarDeclaration: FunctionDeclaration = {
 const commandStaffDeclaration: FunctionDeclaration = {
   name: 'command_staff',
   description:
-    'Commands a Staff member (such as Haiku, the loyal small golden retriever puppy with a little black tuxedo bow on his collar) to run their assigned task and post their in-character roleplay response + task result directly into the chat.',
+    'Commands a Staff member (such as Haiku the loyal golden retriever puppy, A Monkey the chaotic capuchin imp, or Carbon the chronically flustered junior gothic intern) to run their assigned task and post their in-character roleplay response + task result directly into the chat.',
   parameters: {
     type: Type.OBJECT,
     description: 'Staff member name, job name, and task input.',
@@ -9735,7 +9837,13 @@ export async function runClientChatTurn(params: {
                   });
                 }
               } catch {
-                haikuDeliveryNote = `*trots up to the Coding Agent's desk with Argon's "${title}" blueprint and drops it proudly into the build queue!* "Special delivery from Argon!"`;
+                if (matchedStaffCourier.name.toLowerCase().includes('carbon')) {
+                  haikuDeliveryNote = `*trips over his own boot laces and drops Argon's "${title}" blueprint onto the Coding Agent's desk, trembling as he pushes his crooked glasses up* "P-Per Argon's urgent dispatch! Please don't blame me...!"`;
+                } else if (matchedStaffCourier.name.toLowerCase().includes('monkey')) {
+                  haikuDeliveryNote = `*swings down from the conduit pipe and flings Argon's "${title}" blueprint right onto the Coding Agent's keyboard with a cheeky chitter!* "Special delivery! Ooh-ooh!"`;
+                } else {
+                  haikuDeliveryNote = `*trots up to the Coding Agent's desk with Argon's "${title}" blueprint and drops it proudly into the build queue!* "Special delivery from Argon!"`;
+                }
                 staffOutputs.push({
                   agentName: matchedStaffCourier.name,
                   jobTitle: matchedStaffCourier.jobTitle || 'Courier',
@@ -16755,8 +16863,8 @@ export const DEFAULT_AUTONOMOUS_ACTIONS: AutonomousActionPoolItem[] = [
   },
   {
     id: 'command_staff',
-    name: "🐕 Command Haiku / Staff Chore",
-    description: "Assign a chore or inspection to Haiku the Golden Retriever Puppy or Sanctuary Staff.",
+    name: "🐕 Command Haiku / Carbon / Staff",
+    description: "Assign a chore or errand to Haiku the puppy, A Monkey, or Carbon the stressed gothic intern.",
     toolHint: 'command_staff',
     enabled: true,
   },

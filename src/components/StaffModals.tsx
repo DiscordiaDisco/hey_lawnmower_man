@@ -27,6 +27,9 @@ function resolveAgentAvatarCoords(agent: StaffAgent): { xPct: number; yPct: numb
   if (agent.id === 'agent-haiku' || agent.name.toLowerCase().includes('haiku')) {
     return { xPct: 50, yPct: 28, label: 'Haiku Puppy Paw Slamming Bell' };
   }
+  if (agent.id === 'agent-carbon' || agent.name.toLowerCase().includes('carbon')) {
+    return { xPct: 36, yPct: 96, label: 'Carbon (Stressed Intern)' };
+  }
   return { xPct: 50, yPct: 52, label: 'Gentleman Mouse' };
 }
 
@@ -495,7 +498,10 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
           const entityKey = normalizePermissionEntityKey(agent.id || agent.name);
           const agentPerms = getPermissionsForEntity(entityKey, activeMatrix);
           const isBuiltInStaff =
-            agent.id === 'agent-haiku' || agent.id === 'agent-monkey';
+            agent.id === 'agent-haiku' ||
+            agent.id === 'agent-monkey' ||
+            agent.id === 'agent-carbon' ||
+            agent.name.toLowerCase().includes('carbon');
 
           return (
             <div
@@ -550,6 +556,13 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
                         return (
                           <div className="w-full h-full flex flex-col items-center justify-center bg-[#181524] text-amber-200 select-none">
                             <span className="text-lg leading-none">🐒</span>
+                          </div>
+                        );
+                      }
+                      if (agent.name.toLowerCase().includes('carbon')) {
+                        return (
+                          <div className="w-full h-full flex flex-col items-center justify-center bg-[#18181f] text-slate-300 select-none" title="Carbon (Stressed Intern)">
+                            <span className="text-lg leading-none">📜</span>
                           </div>
                         );
                       }

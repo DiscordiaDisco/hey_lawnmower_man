@@ -1,0 +1,248 @@
+@import "tailwindcss";
+
+@layer base {
+  :root,
+  html,
+  body,
+  #root {
+    background-color: #0b090e !important;
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: #0b090e !important;
+    color: #f3e7d3;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    letter-spacing: 0.01em;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.font-display-crest {
+  font-family: 'Cinzel', 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-serif-webtoon {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-sans-ui {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Clean Vertical Gothic Library Portrait Wallpaper (No Baked-in UI) */
+.gothic-stage-bg {
+  background-color: #0b090e;
+  background-image: url('/assets/aistudio/cba6804f7672d8f0da1f25b3c6a5b600_2c529b40.webp');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.argon-sprite-sheet-bg {
+  background-size: 500% 700%;
+  background-repeat: no-repeat;
+}
+
+.apothecary-icon-sheet-bg {
+  background-size: 380% 500%;
+  background-repeat: no-repeat;
+}
+
+/* Pure CSS Top Header Pill Button Texture */
+.gilded-pill-btn {
+  background: linear-gradient(180deg, rgba(48, 37, 29, 0.9) 0%, rgba(24, 18, 14, 0.95) 100%);
+  border: 1px solid rgba(197, 155, 71, 0.65);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 228, 178, 0.2),
+    0 2px 6px rgba(0, 0, 0, 0.6);
+  color: #efe0c6;
+  transition: all 150ms ease;
+}
+.gilded-pill-btn:hover {
+  border-color: #dfbc7c;
+  background: linear-gradient(180deg, rgba(64, 49, 38, 0.95) 0%, rgba(32, 24, 18, 0.98) 100%);
+}
+.gilded-pill-btn:active {
+  transform: scale(0.98);
+}
+
+/* Translucent Smoked-Glass Chat Bubbles (Dark Apothecary Glass without GPU-blanking backdrop-filter on Android) */
+.bubble-smoked-glass,
+.bubble-hex,
+.bubble-argon {
+  background: rgba(18, 13, 15, 0.88);
+  border: 1px solid rgba(197, 155, 71, 0.55);
+  border-radius: 14px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+  color: #f5ead8;
+  position: relative;
+}
+
+/* Avatar Crop Helpers using the Clean Vertical Portrait Wallpaper */
+.avatar-crop-hex {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 52% 42%;
+  transform-origin: 50% 50%;
+  transform: scale(4.2) translate(-2.5%, 9.5%);
+  display: block;
+}
+
+.avatar-crop-argon {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 73% 39%;
+  transform-origin: 50% 50%;
+  transform: scale(3.2) translate(-22%, 10%);
+  display: block;
+}
+
+.avatar-crop-fox {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 8% 43%;
+  transform-origin: 50% 50%;
+  transform: scale(4.2) translate(40%, 8%);
+  display: block;
+}
+
+.gilded-circle-btn {
+  background: linear-gradient(180deg, rgba(46, 34, 26, 0.94) 0%, rgba(20, 14, 11, 0.98) 100%);
+  border: 1.5px solid #c59b47;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 228, 178, 0.25),
+    0 3px 10px rgba(0, 0, 0, 0.75);
+  color: #f3e2c3;
+  transition: all 150ms ease;
+}
+.gilded-circle-btn:hover {
+  border-color: #e6c88c;
+  background: linear-gradient(180deg, rgba(64, 48, 36, 0.96) 0%, rgba(28, 20, 15, 0.99) 100%);
+}
+.gilded-circle-btn:active {
+  transform: scale(0.95);
+}
+
+/* Prompt Access / Minimize Chat Center Crest */
+.prompt-access-crest {
+  background: linear-gradient(180deg, #271f18 0%, #140f0c 100%);
+  border: 1.5px solid #cfa968;
+  box-shadow:
+    0 0 0 2px #120d0a,
+    0 0 0 3px rgba(181, 144, 83, 0.45),
+    inset 0 1px 1px rgba(255, 232, 185, 0.25),
+    0 6px 16px rgba(0, 0, 0, 0.85);
+  color: #f2e2c4;
+}
+
+/* Bottom Dock Frame & Metallic Gold Send Button */
+.gilded-dock-frame {
+  background: linear-gradient(180deg, rgba(26, 19, 15, 0.96) 0%, rgba(14, 10, 8, 0.99) 100%);
+  border: 1.5px solid #b58f52;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 225, 172, 0.2),
+    0 -8px 28px rgba(0, 0, 0, 0.85);
+}
+
+.gilded-send-btn {
+  background: linear-gradient(180deg, #634b2b 0%, #42301a 55%, #2b1f10 100%);
+  border: 1.5px solid #d2ae6d;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 235, 190, 0.38),
+    0 2px 8px rgba(0, 0, 0, 0.7);
+  color: #f6e7c8;
+}
+.gilded-send-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #755934 0%, #4f3a20 55%, #362714 100%);
+  border-color: #e5c485;
+}
+
+.gilded-image-btn {
+  background: linear-gradient(180deg, #2b211a 0%, #17110d 100%);
+  border: 1.5px solid #a68249;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 225, 172, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.65);
+  color: #e6d4b5;
+}
+
+.gilded-input-well {
+  background: rgba(11, 8, 7, 0.94);
+  border: 1px solid #6b5331;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.85);
+  color: #f5ead8;
+}
+.gilded-input-well:focus {
+  border-color: #cfa968;
+  outline: none;
+}
+
+/* Custom subtle scrollbars for dark espresso-gold theme */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 11, 9, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: #594327;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #84643b;
+}
+
+/* Mobile Viewport Lock for System Settings Room (Prevents Horizontal Sliding / Void Overflow on Android) */
+.system-settings-scroll-lock {
+  overflow-x: hidden !important;
+  max-width: 100% !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  touch-action: pan-y;
+}
+
+.system-settings-scroll-lock section,
+.system-settings-scroll-lock div,
+.system-settings-scroll-lock form,
+.system-settings-scroll-lock select,
+.system-settings-scroll-lock input,
+.system-settings-scroll-lock textarea,
+.system-settings-scroll-lock button {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.system-settings-scroll-lock section {
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.system-settings-scroll-lock code {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+

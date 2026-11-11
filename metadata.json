@@ -1,0 +1,6 @@
+{
+  "name": "ARGON & HEX WORKBENCH",
+  "description": "Mobile-first dark-mode prompt engineering workbench for Argon & Hex with live environmental telemetry, Gist-synced Lorebook drawers, and tremor-safe code copy blocks.",
+  "requestFramePermissions": ["geolocation", "camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

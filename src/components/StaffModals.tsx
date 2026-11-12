@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   ALLOWED_PRESET_MODELS,
+  BRAIN_ENGINE_OPTIONS,
   AgentToolPermissions,
   STAFF_AVATAR_PRESETS,
   StaffAgent,
@@ -658,35 +659,65 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
 
 
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono text-[#cbb693]">
-                  <label htmlFor={`quarters-job-select-${agent.id}`}>
-                    Job Preset:
-                  </label>
-                  {onAssignJob ? (
-                    <select
-                      id={`quarters-job-select-${agent.id}`}
-                      data-testid={`quarters-job-select-${entityKey}`}
-                      value={agent.assignedJobId}
-                      onChange={(e) => onAssignJob(agent.id, e.target.value)}
-                      className="h-8 px-2 rounded-lg gilded-input-well font-mono text-[11px] text-[#e6c88c]"
-                    >
-                      {jobs.map((job) => (
-                        <option key={job.id} value={job.id}>
-                          {job.title}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <strong className="text-[#e6c88c]">{assignedJob?.title || 'Unassigned'}</strong>
-                  )}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 min-w-0 max-w-full">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-[#cbb693] min-w-0 max-w-full">
+                  <div className="flex items-center gap-1.5 min-w-0 max-w-full">
+                    <label htmlFor={`quarters-model-select-${agent.id}`} className="shrink-0">
+                      Model:
+                    </label>
+                    {onUpdateAgent ? (
+                      <select
+                        id={`quarters-model-select-${agent.id}`}
+                        data-testid={`quarters-model-select-${entityKey}`}
+                        value={agent.model || 'gemini-3.8-flash'}
+                        onChange={(e) => onUpdateAgent(agent.id, { model: e.target.value })}
+                        className="min-h-[40px] px-2.5 rounded-lg gilded-input-well font-mono text-[11px] text-[#ffe5a3] min-w-0 max-w-[220px] truncate cursor-pointer"
+                      >
+                        {!BRAIN_ENGINE_OPTIONS.some((opt) => opt.id === agent.model) && agent.model && (
+                          <option value={agent.model} className="bg-[#16100d] text-[#f5ead8]">
+                            {agent.model}
+                          </option>
+                        )}
+                        {BRAIN_ENGINE_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id} className="bg-[#16100d] text-[#f5ead8]">
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <strong className="text-[#e6c88c]">{agent.model}</strong>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 min-w-0 max-w-full">
+                    <label htmlFor={`quarters-job-select-${agent.id}`} className="shrink-0">
+                      Job Preset:
+                    </label>
+                    {onAssignJob ? (
+                      <select
+                        id={`quarters-job-select-${agent.id}`}
+                        data-testid={`quarters-job-select-${entityKey}`}
+                        value={agent.assignedJobId}
+                        onChange={(e) => onAssignJob(agent.id, e.target.value)}
+                        className="min-h-[40px] px-2.5 rounded-lg gilded-input-well font-mono text-[11px] text-[#e6c88c] min-w-0 max-w-[200px] truncate cursor-pointer"
+                      >
+                        {jobs.map((job) => (
+                          <option key={job.id} value={job.id} className="bg-[#16100d] text-[#f5ead8]">
+                            {job.title}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <strong className="text-[#e6c88c]">{assignedJob?.title || 'Unassigned'}</strong>
+                    )}
+                  </div>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => onOrderInChat(agent)}
                   data-testid={`command-staff-btn-${entityKey}`}
-                  className="h-8 px-3 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                  className="min-h-[44px] px-3.5 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
                 >
                   <ApothecaryIcon icon="staffStatusActive" xPct={50} yPct={28} size={18} />
                   <span>Command {agent.name} in Chat</span>
@@ -765,23 +796,29 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
                 </div>
               </div>
 
-              {/* 1. Model Dropdown */}
+              {/* 1. Model Dropdown (Full Unified Brain & Omni Model List) */}
               <div>
                 <label
                   htmlFor="edit-staff-model"
                   className="block text-xs font-mono text-[#d4b483] mb-1"
                 >
-                  Assigned Gemini Model
+                  Assigned Brain / Model
                 </label>
                 <select
                   id="edit-staff-model"
+                  data-testid="edit-staff-model-select"
                   value={editModel}
                   onChange={(e) => setEditModel(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl gilded-input-well font-mono text-xs text-[#f5ead8]"
+                  className="w-full min-h-[44px] px-3 rounded-xl gilded-input-well font-mono text-xs text-[#f5ead8] cursor-pointer"
                 >
-                  {ALLOWED_PRESET_MODELS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+                  {!BRAIN_ENGINE_OPTIONS.some((opt) => opt.id === editModel) && editModel && (
+                    <option value={editModel} className="bg-[#16100d] text-[#f5ead8]">
+                      {editModel}
+                    </option>
+                  )}
+                  {BRAIN_ENGINE_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id} className="bg-[#16100d] text-[#f5ead8]">
+                      {opt.label}
                     </option>
                   ))}
                 </select>
@@ -967,23 +1004,29 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
                 </div>
               </div>
 
-              {/* 1. Model Dropdown */}
+              {/* 1. Model Dropdown (Full Unified Brain & Omni Model List) */}
               <div>
                 <label
                   htmlFor="hire-staff-model"
                   className="block text-xs font-mono text-[#d4b483] mb-1"
                 >
-                  Assigned Gemini Model
+                  Assigned Brain / Model
                 </label>
                 <select
                   id="hire-staff-model"
+                  data-testid="hire-staff-model-select"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl gilded-input-well font-mono text-xs text-[#f5ead8]"
+                  className="w-full min-h-[44px] px-3 rounded-xl gilded-input-well font-mono text-xs text-[#f5ead8] cursor-pointer"
                 >
-                  {ALLOWED_PRESET_MODELS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+                  {!BRAIN_ENGINE_OPTIONS.some((opt) => opt.id === model) && model && (
+                    <option value={model} className="bg-[#16100d] text-[#f5ead8]">
+                      {model}
+                    </option>
+                  )}
+                  {BRAIN_ENGINE_OPTIONS.map((opt) => (
+                    <option key={opt.id} value={opt.id} className="bg-[#16100d] text-[#f5ead8]">
+                      {opt.label}
                     </option>
                   ))}
                 </select>
@@ -1119,6 +1162,7 @@ interface StaffStatusModalProps {
   agents: StaffAgent[];
   jobs: StaffJobDescription[];
   onAssignJob: (agentId: string, jobId: string) => void;
+  onUpdateAgent?: (agentId: string, updates: Partial<StaffAgent>) => void;
   onRunAgentTask: (agentId: string) => Promise<void>;
   onStopAgentTask: (agentId: string) => void;
   onCreateJob: (title: string, prompt: string) => void;
@@ -1132,6 +1176,7 @@ export const StaffStatusModal: React.FC<StaffStatusModalProps> = ({
   agents,
   jobs,
   onAssignJob,
+  onUpdateAgent,
   onRunAgentTask,
   onStopAgentTask,
   onCreateJob,
@@ -1264,26 +1309,56 @@ export const StaffStatusModal: React.FC<StaffStatusModalProps> = ({
                   </span>
                 </div>
 
-                {/* Dropdown to Switch Assigned Task */}
-                <div>
-                  <label
-                    htmlFor={`staff-job-select-${agent.id}`}
-                    className="block text-[11px] font-mono text-[#d4b483] mb-1"
-                  >
-                    Assigned Pipeline Task (Job Description):
-                  </label>
-                  <select
-                    id={`staff-job-select-${agent.id}`}
-                    value={agent.assignedJobId}
-                    onChange={(e) => onAssignJob(agent.id, e.target.value)}
-                    className="w-full h-9 px-2.5 rounded-xl gilded-input-well font-mono text-xs text-[#f5ead8]"
-                  >
-                    {jobs.map((job) => (
-                      <option key={job.id} value={job.id}>
-                        {job.title} — {job.prompt.slice(0, 48)}…
-                      </option>
-                    ))}
-                  </select>
+                {/* Dropdowns to Switch Assigned Brain/Model & Assigned Pipeline Task */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {onUpdateAgent && (
+                    <div>
+                      <label
+                        htmlFor={`staff-model-select-${agent.id}`}
+                        className="block text-[11px] font-mono text-[#d4b483] mb-1"
+                      >
+                        Assigned Brain / Model:
+                      </label>
+                      <select
+                        id={`staff-model-select-${agent.id}`}
+                        value={agent.model || 'gemini-3.8-flash'}
+                        onChange={(e) => onUpdateAgent(agent.id, { model: e.target.value })}
+                        className="w-full min-h-[40px] px-2.5 rounded-xl gilded-input-well font-mono text-xs text-[#ffe5a3] cursor-pointer"
+                      >
+                        {!BRAIN_ENGINE_OPTIONS.some((opt) => opt.id === agent.model) && agent.model && (
+                          <option value={agent.model} className="bg-[#16100d] text-[#f5ead8]">
+                            {agent.model}
+                          </option>
+                        )}
+                        {BRAIN_ENGINE_OPTIONS.map((opt) => (
+                          <option key={opt.id} value={opt.id} className="bg-[#16100d] text-[#f5ead8]">
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <label
+                      htmlFor={`staff-job-select-${agent.id}`}
+                      className="block text-[11px] font-mono text-[#d4b483] mb-1"
+                    >
+                      Assigned Pipeline Task (Job Description):
+                    </label>
+                    <select
+                      id={`staff-job-select-${agent.id}`}
+                      value={agent.assignedJobId}
+                      onChange={(e) => onAssignJob(agent.id, e.target.value)}
+                      className="w-full min-h-[40px] px-2.5 rounded-xl gilded-input-well font-mono text-xs text-[#f5ead8] cursor-pointer"
+                    >
+                      {jobs.map((job) => (
+                        <option key={job.id} value={job.id} className="bg-[#16100d] text-[#f5ead8]">
+                          {job.title} — {job.prompt.slice(0, 48)}…
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 {currentJob && (

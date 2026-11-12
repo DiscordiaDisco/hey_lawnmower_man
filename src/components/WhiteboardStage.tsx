@@ -1,5 +1,30 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ChevronDown,
+  Circle,
+  Eraser,
+  Eye,
+  Grid3x3,
+  Heart,
+  KeyRound,
+  MessageSquare,
+  Minus,
+  PaintBucket,
+  Palette,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Smile,
+  Sparkles,
+  Square,
+  Star,
+  Trash2,
+  Triangle,
+  Undo2,
+  X,
+} from 'lucide-react';
+import {
   WhiteboardPoint,
   WhiteboardStroke,
   normalizeStrokePointsToCanvas,
@@ -42,27 +67,27 @@ const COLORS = [
 const ALL_TOOLS: ReadonlyArray<{
   id: WhiteboardToolType;
   label: string;
-  icon: string;
+  Icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { id: 'pen', label: 'Pen', icon: '✏️' },
-  { id: 'eraser', label: 'Eraser', icon: '🧹' },
-  { id: 'line', label: 'Line', icon: '╱' },
-  { id: 'circle', label: 'Circle', icon: '◯' },
-  { id: 'rect', label: 'Square', icon: '▭' },
-  { id: 'triangle', label: 'Triangle', icon: '△' },
-  { id: 'star', label: 'Star', icon: '★' },
-  { id: 'heart', label: 'Heart', icon: '♡' },
+  { id: 'pen', label: 'Pen', Icon: Pencil },
+  { id: 'eraser', label: 'Eraser', Icon: Eraser },
+  { id: 'line', label: 'Line', Icon: Minus },
+  { id: 'circle', label: 'Circle', Icon: Circle },
+  { id: 'rect', label: 'Square', Icon: Square },
+  { id: 'triangle', label: 'Triangle', Icon: Triangle },
+  { id: 'star', label: 'Star', Icon: Star },
+  { id: 'heart', label: 'Heart', Icon: Heart },
 ];
 
 const TOOL_LABELS: Record<WhiteboardToolType, string> = {
-  pen: '✏️ Pen',
-  eraser: '🧹 Eraser',
-  line: '╱ Line',
-  circle: '◯ Circle',
-  rect: '▭ Square',
-  triangle: '△ Triangle',
-  star: '★ Star',
-  heart: '♡ Heart',
+  pen: 'Pen',
+  eraser: 'Eraser',
+  line: 'Line',
+  circle: 'Circle',
+  rect: 'Square',
+  triangle: 'Triangle',
+  star: 'Star',
+  heart: 'Heart',
 };
 
 function renderStrokeOnCanvas(
@@ -226,25 +251,29 @@ function renderStrokeOnCanvas(
 const ARGON_TURN_MODES = [
   {
     id: 'co_draw',
-    label: '✨ Complete Scene',
+    label: 'Complete Scene',
+    Icon: Sparkles,
     prompt:
       'Visually inspect what I drew on the canvas and draw your own original companion sketch or scene completion in an open spot!',
   },
   {
     id: 'pictionary',
-    label: '🕵️ Pictionary Guess',
+    label: 'Pictionary Guess',
+    Icon: Search,
     prompt:
       'Play Pictionary! Visually guess what I drew on the canvas, tell me your guess, and draw a funny visual reaction or clue of your own!',
   },
   {
     id: 'tic_tac_toe',
-    label: '❌⭕ Tic-Tac-Toe',
+    label: 'Tic-Tac-Toe',
+    Icon: Grid3x3,
     prompt:
       'Look at the Tic-Tac-Toe grid/marks on the canvas and draw your next X or O in an empty cell to beat me!',
   },
   {
     id: 'cartoon',
-    label: '😈 Cartoon Reply',
+    label: 'Cartoon Reply',
+    Icon: Smile,
     prompt:
       'Look at my drawing and draw a funny original cartoon or chibi response next to it!',
   },
@@ -420,204 +449,240 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
 
   const hexStrokeCount = strokes.filter((s) => s.author === 'hex').length;
   const argonStrokeCount = strokes.filter((s) => s.author === 'argon').length;
+  const ActiveToolIcon =
+    ALL_TOOLS.find((t) => t.id === activeTool)?.Icon || Palette;
 
   return (
     <div
       data-testid="whiteboard-stage"
-      className="flex-1 min-h-0 flex flex-col px-2.5 sm:px-5 py-2 space-y-2 overflow-y-auto"
+      className="flex-1 min-h-0 w-full max-w-full min-w-0 flex flex-col px-2 sm:px-5 py-2 space-y-2 overflow-y-auto overflow-x-hidden box-border"
     >
-      {/* Quick Actions Top Bar (Clean single slim bar with Tools & Palette Popover Button) */}
-      <div className="relative p-2 rounded-xl bubble-smoked-glass border border-[#c59b47]/70">
+      {/* Mobile-Safe Quick Actions Top Card (Zero horizontal overflow on 360px-430px phones) */}
+      <div className="relative w-full max-w-full min-w-0 p-2 rounded-xl bg-[#e6a8b5]/[0.08] border border-[#D4AF37]/60 space-y-1.5 box-border">
+        {/* Row 1: Return to Chat + Title + Undo / Clear */}
         <div className="flex items-center justify-between gap-1.5 w-full min-w-0">
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 min-w-0">
             <button
               type="button"
               onClick={onReturnToChat}
-              className="h-7 px-2.5 rounded-full gilded-pill-btn text-xs font-semibold cursor-pointer whitespace-nowrap"
+              className="min-h-[44px] px-3 rounded-full gilded-pill-btn text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5"
             >
-              💬 Chat
+              <MessageSquare className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+              <span>Chat</span>
             </button>
-            <span className="text-xs font-serif font-bold text-[#e6c88c] whitespace-nowrap hidden xs:inline">
-              🎨 Argon &amp; Hex&apos;s Whiteboard
+            <span className="text-xs font-serif font-bold text-[#e6c88c] truncate min-w-0">
+              Whiteboard
             </span>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0 ml-auto">
-            {/* Consolidated Pop-Up Tools & Palette Button */}
-            <button
-              type="button"
-              data-testid="whiteboard-palette-popover-btn"
-              onClick={() => setIsPaletteOpen((prev) => !prev)}
-              className="h-7 px-2.5 rounded-full gilded-pill-btn text-[11px] font-mono font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-              title="Open Drawing Tools, Shapes, Fill & Colors"
-            >
-              <span
-                className="w-2.5 h-2.5 rounded-full border border-[#fff3db]/60 inline-block shrink-0"
-                style={{
-                  backgroundColor: activeTool === 'eraser' ? '#ffffff' : activeColor,
-                }}
-              />
-              <span>{TOOL_LABELS[activeTool] || '🎨 Palette'} ▾</span>
-            </button>
-
-            <button
-              type="button"
-              data-testid="whiteboard-argons-turn-btn"
-              disabled={isArgonDrawing}
-              onClick={() => void handleTriggerArgonDraw()}
-              className="h-7 px-2.5 rounded-full gilded-send-btn text-[11px] font-mono font-bold text-[#fff3db] cursor-pointer disabled:opacity-50 whitespace-nowrap"
-            >
-              {isArgonDrawing ? '✒️…' : "🎨 Argon's Turn"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setCoDrawLive((prev) => !prev)}
-              className={`h-7 px-2 rounded-full text-[10px] font-mono cursor-pointer border whitespace-nowrap ${
-                coDrawLive
-                  ? 'bg-emerald-950/90 border-emerald-400/70 text-emerald-200'
-                  : 'bg-[#1a120e] border-[#785c37]/60 text-[#cbb693]'
-              }`}
-              title="Auto-Turn: Argon draws a companion piece when Hex finishes a stroke"
-            >
-              {coDrawLive ? '🤝 Auto' : '🤝 Turn'}
-            </button>
-
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={onUndoStroke}
-              className="h-7 px-2 rounded-full gilded-pill-btn text-[10px] font-mono cursor-pointer whitespace-nowrap"
+              className="min-h-[44px] px-2.5 rounded-full gilded-pill-btn text-[11px] font-mono cursor-pointer whitespace-nowrap flex items-center gap-1"
               title="Undo last stroke"
             >
-              ↩ Undo
+              <Undo2 className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+              <span>Undo</span>
             </button>
 
             <button
               type="button"
               onClick={onClearBoard}
-              className="h-7 px-2 rounded-full bg-red-950/80 border border-red-500/50 text-[10px] font-mono text-red-200 cursor-pointer whitespace-nowrap"
+              className="min-h-[44px] px-2.5 rounded-full bg-red-950/80 border border-red-500/50 text-[11px] font-mono text-red-200 cursor-pointer whitespace-nowrap flex items-center gap-1"
               title="Clear entire canvas"
             >
-              🗑️ Clear
+              <Trash2 className="w-3.5 h-3.5 text-red-300 shrink-0" />
+              <span>Clear</span>
             </button>
           </div>
         </div>
 
-        {/* Pop-Up Tools & Palette Dropdown Menu (Auto-closes on tool or color selection) */}
+        {/* Row 2: 3-Column Responsive Action Grid (Tools/Palette, Argon's Turn, Auto-Turn Toggle) */}
+        <div className="grid grid-cols-3 gap-1.5 w-full min-w-0">
+          <button
+            type="button"
+            data-testid="whiteboard-palette-popover-btn"
+            onClick={() => setIsPaletteOpen((prev) => !prev)}
+            className="min-h-[44px] min-w-0 px-2 rounded-xl gilded-pill-btn text-[11px] font-mono font-semibold flex items-center justify-center gap-1 cursor-pointer overflow-hidden"
+            title="Open Drawing Tools, Shapes, Fill & Colors"
+          >
+            <span
+              className="w-2.5 h-2.5 rounded-full border border-[#fff3db]/60 inline-block shrink-0"
+              style={{
+                backgroundColor: activeTool === 'eraser' ? '#ffffff' : activeColor,
+              }}
+            />
+            <ActiveToolIcon className="w-3.5 h-3.5 text-[#E6A8B5] shrink-0" />
+            <span className="truncate">{TOOL_LABELS[activeTool] || 'Tools'}</span>
+            <ChevronDown className="w-3 h-3 text-[#D4AF37] shrink-0" />
+          </button>
+
+          <button
+            type="button"
+            data-testid="whiteboard-argons-turn-btn"
+            disabled={isArgonDrawing}
+            onClick={() => void handleTriggerArgonDraw()}
+            className="min-h-[44px] min-w-0 px-2 rounded-xl gilded-send-btn text-[11px] font-mono font-bold text-[#fff3db] cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1 overflow-hidden"
+          >
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              {isArgonDrawing ? 'Drawing…' : "Argon's Turn"}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setCoDrawLive((prev) => !prev)}
+            className={`min-h-[44px] min-w-0 px-2 rounded-xl text-[11px] font-mono cursor-pointer border flex items-center justify-center gap-1 overflow-hidden ${
+              coDrawLive
+                ? 'bg-emerald-950/90 border-emerald-400/70 text-emerald-200 font-semibold'
+                : 'bg-[#161215] border-[#D4AF37]/40 text-[#cbb693]'
+            }`}
+            title="Auto-Turn: Argon draws a companion piece when Hex finishes a stroke"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${coDrawLive ? 'text-emerald-300' : 'text-[#E6A8B5]'}`} />
+            <span className="truncate">{coDrawLive ? 'Auto: ON' : 'Auto: OFF'}</span>
+          </button>
+        </div>
+
+        {/* Viewport-Clamped Pop-Up Tools & Palette Menu (Never overflows off left/right screen edges on phones) */}
         {isPaletteOpen && (
           <>
-            {/* Backdrop to auto-close when clicking outside */}
+            {/* Backdrop to auto-close when tapping outside */}
             <div
-              className="fixed inset-0 z-40 bg-black/40 backdrop-blur-xs"
+              className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs"
               onClick={() => setIsPaletteOpen(false)}
             />
 
             <div
               data-testid="whiteboard-tools-palette-popover"
-              className="absolute top-11 right-2 z-50 w-[290px] sm:w-[320px] rounded-2xl bg-[#140e11]/98 border-2 border-[#e6c88c]/80 p-3 space-y-3 shadow-2xl backdrop-blur-md"
+              className="fixed inset-x-3 top-14 sm:top-20 z-50 mx-auto w-auto max-w-[380px] max-h-[82dvh] overflow-y-auto overflow-x-hidden rounded-2xl bg-[#161215]/98 border border-[#D4AF37] p-3.5 space-y-3 shadow-2xl backdrop-blur-md box-border"
             >
-              <div className="flex items-center justify-between border-b border-[#6b5331]/50 pb-1.5">
-                <span className="text-xs font-serif font-bold text-[#e6c88c]">
-                  🎨 Drawing Tools &amp; Palette
-                </span>
+              <div className="flex items-center justify-between gap-2 border-b border-[#D4AF37]/30 pb-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Palette className="w-4 h-4 text-[#E6A8B5] shrink-0" />
+                  <span className="text-xs font-serif font-bold text-[#e6c88c] truncate">
+                    Drawing Tools &amp; Palette
+                  </span>
+                </div>
                 <button
                   type="button"
                   onClick={() => setIsPaletteOpen(false)}
-                  className="text-xs text-[#cbb693] hover:text-[#fff3db] cursor-pointer px-1.5 py-0.5 rounded"
+                  className="min-h-[44px] min-w-[44px] px-2.5 rounded-xl bg-[#e6a8b5]/[0.08] border border-[#E6A8B5]/40 text-xs text-[#f5ead8] hover:text-[#fff3db] cursor-pointer flex items-center justify-center gap-1 shrink-0"
                 >
-                  ✕ Close
+                  <X className="w-3.5 h-3.5 text-[#E6A8B5]" />
+                  <span>Close</span>
                 </button>
               </div>
 
-              {/* Tools & Shapes Grid */}
+              {/* Tools & Shapes Grid (4-col vertical stack with 48px touch targets) */}
               <div>
-                <div className="text-[10px] font-mono text-[#cbb693] mb-1">
+                <div className="text-[11px] font-mono text-[#cbb693] mb-1.5">
                   Tools &amp; Shapes:
                 </div>
-                <div className="grid grid-cols-4 gap-1">
-                  {ALL_TOOLS.map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveTool(t.id);
-                        setIsPaletteOpen(false); // auto-close on selection
-                      }}
-                      className={`h-7 px-1.5 rounded-lg text-[10px] font-mono cursor-pointer border flex items-center justify-center gap-1 ${
-                        activeTool === t.id
-                          ? 'bg-[#2c1f16] border-[#e6c88c] text-[#f5ead8] font-bold ring-1 ring-[#e6c88c]'
-                          : 'bg-[#120d0b] border-[#6b5331]/50 text-[#cbb693]'
-                      }`}
-                    >
-                      <span>{t.icon}</span>
-                      <span>{t.label}</span>
-                    </button>
-                  ))}
+                <div className="grid grid-cols-4 gap-1.5">
+                  {ALL_TOOLS.map((t) => {
+                    const ToolIcon = t.Icon;
+                    const isSelected = activeTool === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveTool(t.id);
+                          setIsPaletteOpen(false);
+                        }}
+                        className={`min-h-[48px] px-1 py-1.5 rounded-xl text-[10px] font-mono cursor-pointer border flex flex-col items-center justify-center gap-1 min-w-0 ${
+                          isSelected
+                            ? 'bg-[#2c1f24] border-[#D4AF37] text-[#fff3db] font-bold ring-1 ring-[#D4AF37]/60'
+                            : 'bg-[#e6a8b5]/[0.06] border-[#E6A8B5]/25 text-[#cbb693]'
+                        }`}
+                      >
+                        <ToolIcon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-[#D4AF37]' : 'text-[#E6A8B5]'}`} />
+                        <span className="truncate max-w-full">{t.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               {/* Shape Fill Toggle */}
-              <div className="flex items-center justify-between bg-[#1b1215] px-2.5 py-1.5 rounded-lg border border-[#6b5331]/40">
-                <span className="text-[10px] font-mono text-[#e6c88c]">Shape Fill:</span>
+              <div className="flex items-center justify-between gap-2 bg-[#e6a8b5]/[0.06] px-3 py-1.5 rounded-xl border border-[#E6A8B5]/25">
+                <span className="text-[11px] font-mono text-[#e6c88c] flex items-center gap-1.5 min-w-0">
+                  <PaintBucket className="w-3.5 h-3.5 text-[#E6A8B5] shrink-0" />
+                  <span className="truncate">Shape Fill:</span>
+                </span>
                 <button
                   type="button"
                   onClick={() => setFillMode((prev) => !prev)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer border ${
+                  className={`min-h-[44px] px-3 rounded-xl text-[11px] font-mono cursor-pointer border shrink-0 ${
                     fillMode
-                      ? 'bg-amber-950/90 border-[#e6c88c] text-[#fff3db]'
-                      : 'bg-[#120d0b] border-[#6b5331]/60 text-[#cbb693]'
+                      ? 'bg-amber-950/90 border-[#D4AF37] text-[#fff3db] font-semibold'
+                      : 'bg-[#161215] border-[#E6A8B5]/30 text-[#cbb693]'
                   }`}
                 >
-                  {fillMode ? '◼️ Filled (28% Tint)' : '◻️ Outline Only'}
+                  {fillMode ? 'Filled (28%)' : 'Outline Only'}
                 </button>
               </div>
 
-              {/* Color Swatches Grid */}
+              {/* Color Swatches Grid (4-col vertical stack with 48px touch targets) */}
               <div>
-                <div className="text-[10px] font-mono text-[#cbb693] mb-1">
+                <div className="text-[11px] font-mono text-[#cbb693] mb-1.5">
                   Color Palette:
                 </div>
                 <div className="grid grid-cols-4 gap-1.5">
-                  {COLORS.map((c) => (
-                    <button
-                      key={c.hex}
-                      type="button"
-                      onClick={() => {
-                        setActiveColor(c.hex);
-                        if (activeTool === 'eraser') setActiveTool('pen');
-                        setIsPaletteOpen(false); // auto-close on selection
-                      }}
-                      className={`h-7 rounded-lg border flex items-center gap-1.5 px-2 cursor-pointer transition-transform ${
-                        activeColor === c.hex && activeTool !== 'eraser'
-                          ? 'border-[#fff3db] bg-[#2a1b1f] ring-1 ring-[#fff3db]'
-                          : 'border-[#6b5331]/40 bg-[#120d0b]'
-                      }`}
-                    >
-                      <span
-                        className="w-3.5 h-3.5 rounded-full shrink-0 border border-black/40"
-                        style={{ backgroundColor: c.hex }}
-                      />
-                      <span className="text-[9px] font-mono text-[#f5ead8] truncate">
-                        {c.label}
-                      </span>
-                    </button>
-                  ))}
+                  {COLORS.map((c) => {
+                    const isSelected = activeColor === c.hex && activeTool !== 'eraser';
+                    return (
+                      <button
+                        key={c.hex}
+                        type="button"
+                        onClick={() => {
+                          setActiveColor(c.hex);
+                          if (activeTool === 'eraser') setActiveTool('pen');
+                          setIsPaletteOpen(false);
+                        }}
+                        className={`min-h-[48px] rounded-xl border flex flex-col items-center justify-center gap-1 px-1 py-1.5 cursor-pointer transition-transform min-w-0 ${
+                          isSelected
+                            ? 'border-[#D4AF37] bg-[#2a1b20] ring-1 ring-[#D4AF37]'
+                            : 'border-[#E6A8B5]/25 bg-[#e6a8b5]/[0.06]'
+                        }`}
+                      >
+                        <span
+                          className="w-4 h-4 rounded-full shrink-0 border border-white/30"
+                          style={{ backgroundColor: c.hex }}
+                        />
+                        <span className="text-[10px] font-mono text-[#f5ead8] truncate max-w-full">
+                          {c.label}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Brush Size Slider */}
-              <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#6b5331]/40">
-                <span className="text-[10px] font-mono text-[#cbb693]">
-                  Brush: {brushSize}px
-                </span>
-                <div className="flex items-center gap-2">
+              {/* Brush Size Controls (Slider + Stepper Buttons for Tremor-Safe Precision) */}
+              <div className="space-y-1.5 pt-2 border-t border-[#D4AF37]/30">
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#cbb693]">
+                  <span>Brush Size: {brushSize}px</span>
                   <span
-                    className="rounded-full bg-[#e6c88c]"
+                    className="rounded-full bg-[#e6c88c] inline-block"
                     style={{
-                      width: `${Math.max(3, brushSize)}px`,
-                      height: `${Math.max(3, brushSize)}px`,
+                      width: `${Math.max(4, brushSize)}px`,
+                      height: `${Math.max(4, brushSize)}px`,
                     }}
                   />
+                </div>
+                <div className="flex items-center gap-2 w-full min-w-0">
+                  <button
+                    type="button"
+                    aria-label="Decrease brush size"
+                    onClick={() => setBrushSize((prev) => Math.max(2, prev - 1))}
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-[#e6a8b5]/[0.08] border border-[#E6A8B5]/35 text-[#f5ead8] flex items-center justify-center cursor-pointer shrink-0"
+                  >
+                    <Minus className="w-4 h-4" />
+                  </button>
                   <input
                     type="range"
                     aria-label="Brush size"
@@ -625,8 +690,16 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
                     max={12}
                     value={brushSize}
                     onChange={(e) => setBrushSize(Number(e.target.value))}
-                    className="w-24 accent-[#e6c88c] cursor-pointer"
+                    className="flex-1 min-w-0 accent-[#D4AF37] cursor-pointer h-6"
                   />
+                  <button
+                    type="button"
+                    aria-label="Increase brush size"
+                    onClick={() => setBrushSize((prev) => Math.min(12, prev + 1))}
+                    className="min-h-[44px] min-w-[44px] rounded-xl bg-[#e6a8b5]/[0.08] border border-[#E6A8B5]/35 text-[#f5ead8] flex items-center justify-center cursor-pointer shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             </div>
@@ -635,7 +708,7 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
       </div>
 
       {/* Interactive Dual-User Canvas */}
-      <div className="relative flex-1 min-h-[240px] flex items-center justify-center rounded-2xl overflow-hidden border-2 border-[#c59b47]/80 shadow-xl bg-[#0e0a0c]">
+      <div className="relative flex-1 min-h-[240px] w-full max-w-full min-w-0 flex items-center justify-center rounded-2xl overflow-hidden border border-[#D4AF37]/80 shadow-xl bg-[#0e0a0c]">
         <canvas
           ref={canvasRef}
           width={1000}
@@ -644,37 +717,39 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          className="w-full h-full max-h-[48vh] object-contain touch-none cursor-crosshair"
+          className="w-full h-full max-h-[46vh] object-contain touch-none cursor-crosshair"
         />
 
         {/* Live Status Overlay */}
-        <div className="absolute top-2 left-2.5 right-2.5 flex items-center justify-between pointer-events-none text-[10px] font-mono">
-          <span className="px-2 py-0.5 rounded-full bg-black/75 border border-[#c59b47]/50 text-[#e6c88c]">
-            🌹 Hex: {hexStrokeCount} · 🖤 Argon: {argonStrokeCount}
+        <div className="absolute top-2 left-2 right-2 flex flex-wrap items-center justify-between gap-1 pointer-events-none text-[10px] font-mono">
+          <span className="px-2 py-0.5 rounded-full bg-black/75 border border-[#D4AF37]/50 text-[#e6c88c] max-w-full truncate">
+            Hex: {hexStrokeCount} · Argon: {argonStrokeCount}
           </span>
           {isArgonDrawing && (
-            <span className="px-2.5 py-0.5 rounded-full bg-amber-950/90 border border-[#e6c88c] text-[#fff3db] animate-pulse">
-              👁️ Argon is viewing your canvas &amp; drawing original strokes…
+            <span className="px-2.5 py-0.5 rounded-full bg-amber-950/90 border border-[#D4AF37] text-[#fff3db] animate-pulse flex items-center gap-1 max-w-full truncate">
+              <Eye className="w-3 h-3 text-[#D4AF37] shrink-0" />
+              <span className="truncate">Argon is drawing…</span>
             </span>
           )}
         </div>
       </div>
 
       {/* Argon's In-Character Whiteboard Reply + Direct Turn Mode & Request Bar */}
-      <div className="p-2.5 rounded-xl bubble-smoked-glass border border-[#c59b47]/60 space-y-2">
+      <div className="w-full max-w-full min-w-0 p-2.5 rounded-xl bg-[#e6a8b5]/[0.08] border border-[#D4AF37]/60 space-y-2 box-border overflow-hidden">
         {whiteboardError && (
           <div
             role="alert"
             className="p-2 rounded-lg bg-red-950/90 border border-red-500/80 text-[11px] font-mono text-red-100 flex flex-wrap items-center justify-between gap-2"
           >
-            <span className="break-words">{whiteboardError}</span>
+            <span className="break-words min-w-0">{whiteboardError}</span>
             {onSelectPaidKey && (
               <button
                 type="button"
                 onClick={onSelectPaidKey}
-                className="px-2 py-0.5 rounded bg-amber-600/90 hover:bg-amber-500 text-amber-50 text-[10px] font-semibold cursor-pointer shrink-0"
+                className="min-h-[44px] px-3 rounded-lg bg-amber-600/90 hover:bg-amber-500 text-amber-50 text-[11px] font-semibold cursor-pointer shrink-0 flex items-center gap-1.5"
               >
-                [ 🔑 Select Paid API Key ]
+                <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                <span>Select Paid API Key</span>
               </button>
             )}
           </div>
@@ -682,50 +757,56 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
 
         <div
           data-testid="argon-whiteboard-reply"
-          className="text-xs font-serif-webtoon text-[#f5ead8] italic leading-snug"
+          className="text-xs font-serif-webtoon text-[#f5ead8] italic leading-snug break-words"
         >
           <strong className="not-italic text-[#e6c88c] font-mono text-[10px] mr-1.5">
-            [🖤 ARGON]:
+            [ARGON]:
           </strong>
           {argonComment}
         </div>
 
-        {/* Quick Mode Selector Pills for Argon's Turn */}
-        <div className="flex flex-wrap items-center gap-1">
-          {ARGON_TURN_MODES.map((mode) => (
-            <button
-              key={mode.id}
-              type="button"
-              disabled={isArgonDrawing}
-              onClick={() => {
-                setSelectedTurnMode(mode.id);
-                void handleTriggerArgonDraw(undefined, mode.prompt);
-              }}
-              className={`h-6 px-2 rounded-full text-[10px] font-mono cursor-pointer border ${
-                selectedTurnMode === mode.id
-                  ? 'bg-[#2c1f16] border-[#e6c88c] text-[#fff3db] font-bold'
-                  : 'bg-[#120d0b] border-[#6b5331]/50 text-[#cbb693]'
-              }`}
-            >
-              {mode.label}
-            </button>
-          ))}
+        {/* Quick Mode Selector Grid (2x2 on mobile, 4-col on sm+, 44px touch targets, zero overflow) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 w-full min-w-0">
+          {ARGON_TURN_MODES.map((mode) => {
+            const ModeIcon = mode.Icon;
+            const isSelected = selectedTurnMode === mode.id;
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                disabled={isArgonDrawing}
+                onClick={() => {
+                  setSelectedTurnMode(mode.id);
+                  void handleTriggerArgonDraw(undefined, mode.prompt);
+                }}
+                className={`min-h-[44px] min-w-0 px-2 rounded-xl text-[11px] font-mono cursor-pointer border flex items-center justify-center gap-1.5 overflow-hidden ${
+                  isSelected
+                    ? 'bg-[#2c1f24] border-[#D4AF37] text-[#fff3db] font-bold'
+                    : 'bg-[#161215] border-[#E6A8B5]/30 text-[#cbb693]'
+                }`}
+              >
+                <ModeIcon className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-[#D4AF37]' : 'text-[#E6A8B5]'}`} />
+                <span className="truncate">{mode.label}</span>
+              </button>
+            );
+          })}
         </div>
 
-        <form onSubmit={handleTriggerArgonDraw} className="flex items-center gap-1.5">
+        <form onSubmit={handleTriggerArgonDraw} className="flex items-center gap-1.5 w-full min-w-0">
           <input
             type="text"
             value={drawPrompt}
             onChange={(e) => setDrawPrompt(e.target.value)}
-            placeholder="Tell Argon what to draw or tap Argon's Turn…"
-            className="flex-1 h-8 px-2.5 rounded-xl gilded-input-well text-xs font-mono text-[#f5ead8]"
+            placeholder="Tell Argon what to draw…"
+            className="flex-1 min-w-0 min-h-[44px] px-3 rounded-xl gilded-input-well text-xs font-mono text-[#f5ead8]"
           />
           <button
             type="submit"
             disabled={isArgonDrawing}
-            className="h-8 px-3 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer whitespace-nowrap disabled:opacity-50"
+            className="min-h-[44px] px-3.5 rounded-xl gilded-send-btn text-xs font-semibold cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 flex items-center gap-1.5"
           >
-            {isArgonDrawing ? 'Drawing…' : "🎨 Argon's Turn"}
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            <span>{isArgonDrawing ? 'Drawing…' : "Argon's Turn"}</span>
           </button>
         </form>
       </div>

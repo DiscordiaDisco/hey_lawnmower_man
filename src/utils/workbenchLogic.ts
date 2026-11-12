@@ -6286,6 +6286,14 @@ export const BRAIN_ENGINE_OPTIONS: BrainEngineOption[] = [
     description: 'Gemini 3.1 Pro Preview with native thinkingLevel reasoning, vision, audio, and tools.',
   },
   {
+    id: 'gemini-3.1-flash-lite',
+    label: 'gemini-3.1-flash-lite (Gemini 3.1 Flash Lite)',
+    shortBadge: '🪶 gemini-3.1-flash-lite',
+    provider: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    description: 'Ultra-fast lightweight Gemini 3.1 Flash Lite brain.',
+  },
+  {
     id: 'gemini-2.5-pro',
     label: 'gemini-2.5-pro (Google Multimodal Pro)',
     shortBadge: '💎 gemini-2.5-pro',
@@ -6316,6 +6324,14 @@ export const BRAIN_ENGINE_OPTIONS: BrainEngineOption[] = [
     provider: 'gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
     description: 'Ultra-fast lightweight Gemini Flash Lite brain.',
+  },
+  {
+    id: 'gemini-omni-1.2-flash',
+    label: 'gemini-omni-1.2-flash (Gemini Omni 1.2 Flash)',
+    shortBadge: '🌐 gemini-omni-1.2-flash',
+    provider: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    description: 'Low-latency Gemini Omni 1.2 Flash multimodal engine.',
   },
   {
     id: 'gemini-omni-1.1-flash',
@@ -13790,7 +13806,7 @@ export async function runClientStaffCameoTurn(params: {
         systemInstruction: systemPrompt,
         maxOutputTokens: 150,
       },
-      model: 'gemini-3.8-flash',
+      model: normalizeModelId(agent.model || 'gemini-3.8-flash'),
       customApiKey,
     });
 

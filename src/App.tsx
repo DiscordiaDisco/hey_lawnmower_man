@@ -7893,6 +7893,7 @@ export default function App() {
         agents={staffAgents}
         jobs={staffJobs}
         onAssignJob={handleAssignJobToAgent}
+        onUpdateAgent={handleUpdateStaffAgent}
         onRunAgentTask={handleRunStaffAgentTask}
         onStopAgentTask={handleStopAgentTask}
         onCreateJob={handleCreateStaffJob}

@@ -1730,7 +1730,7 @@ export const GamesChestModal: React.FC<GamesChestModalProps> = ({
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-5 pb-32 max-w-4xl w-full mx-auto space-y-3">
+      <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-2.5 sm:p-5 pb-32 max-w-4xl w-full mx-auto space-y-3">
         {sentToChatToast && (
           <div className="p-2 rounded-xl bg-emerald-950/90 border border-emerald-400/70 text-xs font-mono text-emerald-100 text-center">
             ✨ {sentToChatToast}
@@ -3398,7 +3398,7 @@ export const GamesChestModal: React.FC<GamesChestModalProps> = ({
             GAME 8: SHARED COLLABORATIVE WHITEBOARD & SKETCHPAD
            ================================================================ */}
         {activeTab === 'board' && (
-          <div className="space-y-3" data-testid="games-whiteboard-panel">
+          <div className="space-y-3 w-full max-w-full min-w-0 overflow-x-hidden" data-testid="games-whiteboard-panel">
             <WhiteboardStage
               strokes={whiteboardStrokes}
               onAddStrokes={onAddWhiteboardStrokes || (() => {})}

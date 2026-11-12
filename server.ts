@@ -40,6 +40,8 @@ import {
   parseArgonBookEntryResponse,
   parseArgonBookCompressionResponse,
   compressArgonJournalEntries,
+  editArgonMemoryBlock,
+  deleteArgonMemoryBlock,
   buildJournalsSystemContext,
   serializeSanctuaryBooksForGist,
   WhiteboardStroke,
@@ -58,7 +60,21 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3000;
+function parsePortFromArgs(): number {
+  const portArgIndex = process.argv.findIndex((a) => a === '--port' || a === '-p');
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const val = parseInt(process.argv[portArgIndex + 1], 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  if (process.env.NODE_ENV === 'production' && process.env.PORT) {
+    const val = parseInt(process.env.PORT, 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  // The dev server MUST run on port 3000 per AI Studio runtime constraints.
+  // Never default to Cloud Run internal proxy port 8080 during dev.
+  return 3000;
+}
+const PORT = parsePortFromArgs();
 
 function resolveRequestApiKey(req: express.Request): string {
   const bodyKey =
@@ -70,7 +86,7 @@ function resolveRequestApiKey(req: express.Request): string {
       ? req.headers['x-custom-api-key'].trim()
       : '';
   const candidate = bodyKey || headerKey;
-  return candidate.startsWith('AIza') ? candidate : '';
+  return candidate;
 }
 
 function getGenAIClient(customApiKey?: string): GoogleGenAI {
@@ -81,7 +97,7 @@ function getGenAIClient(customApiKey?: string): GoogleGenAI {
       : '') ||
     ''
   ).trim();
-  const validCustomKey = savedKey.startsWith('AIza') ? savedKey : '';
+  const validCustomKey = savedKey;
   const activeKey =
     validCustomKey ||
     (process.env as any).API_KEY ||
@@ -182,7 +198,7 @@ const setArgonAvatarDeclaration: FunctionDeclaration = {
 const commandStaffDeclaration: FunctionDeclaration = {
   name: 'command_staff',
   description:
-    'Commands a Staff member (such as Haiku, the loyal small golden retriever puppy with a little black tuxedo bow on his collar) to run their assigned gemini-3.8-flash model call and post their in-character roleplay response + task result directly into the chat.',
+    'Commands a Staff member (such as Haiku the loyal golden retriever puppy to report the real-time clock, ambient weather, or barometric storm readings, A Monkey the chaotic capuchin imp, or Carbon the flustered intern) to run their assigned gemini-3.8-flash model call and post their in-character roleplay response + task result directly into the chat.',
   parameters: {
     type: Type.OBJECT,
     description: 'Staff member name, job name, and task input.',
@@ -301,6 +317,48 @@ const compressArgonJournalDeclaration: FunctionDeclaration = {
   },
 };
 
+const editArgonMemoryDeclaration: FunctionDeclaration = {
+  name: 'edit_argon_memory',
+  description:
+    "Edits the title and/or permanent high-density summary of an existing compressed memory block in Argon's [ 🧠 Memory Section ].",
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Parameters for editing an Argon memory block.',
+    properties: {
+      memory_id: {
+        type: Type.STRING,
+        description: 'The unique ID of the memory block to edit (e.g. "argon-mem-1").',
+      },
+      title: {
+        type: Type.STRING,
+        description: 'Optional updated title for the memory block.',
+      },
+      summary: {
+        type: Type.STRING,
+        description: 'Updated high-density permanent summary text for the memory block.',
+      },
+    },
+    required: ['memory_id', 'summary'],
+  },
+};
+
+const deleteArgonMemoryDeclaration: FunctionDeclaration = {
+  name: 'delete_argon_memory',
+  description:
+    "Deletes/prunes a compressed memory block by ID from Argon's [ 🧠 Memory Section ].",
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Parameters for deleting an Argon memory block.',
+    properties: {
+      memory_id: {
+        type: Type.STRING,
+        description: 'The unique ID of the memory block to delete (e.g. "argon-mem-1").',
+      },
+    },
+    required: ['memory_id'],
+  },
+};
+
 const drawOnWhiteboardDeclaration: FunctionDeclaration = {
   name: 'draw_on_whiteboard',
   description:
@@ -357,6 +415,8 @@ const lorebookFunctionDeclarations: FunctionDeclaration[] = [
   writeArgonBookEntryDeclaration,
   writeArgonJournalDeclaration,
   compressArgonJournalDeclaration,
+  editArgonMemoryDeclaration,
+  deleteArgonMemoryDeclaration,
   drawOnWhiteboardDeclaration,
 ];
 
@@ -439,13 +499,14 @@ async function executeLiveStaffAgentCall(
   jobName: string,
   taskInput: string,
   lorebook: LorebookMap,
-  recentChatTranscript = ''
+  recentChatTranscript = '',
+  telemetryContext = ''
 ): Promise<{ output: string; modelUsed: string }> {
   const drawerSummary = Object.entries(lorebook)
     .map(([k, v]) => `--- ${k} ---\n${v.slice(0, 1200)}`)
     .join('\n\n');
 
-  const staffSysPrompt = buildStaffRoleplaySystemPrompt(agent, jobName);
+  const staffSysPrompt = buildStaffRoleplaySystemPrompt(agent, jobName, undefined, telemetryContext);
 
   const userTaskText = [
     recentChatTranscript
@@ -485,7 +546,7 @@ async function generateArgonReactionToStaff(
   const userText = [
     recentTranscript ? `Recent Room Context:\n${recentTranscript}` : '',
     `${agent.name} (${agent.jobTitle}) just acted and spoke in the chat:\n${staffMessageText}`,
-    `Respond in character as Argon with a short 1-to-2 sentence reaction (*physical action in italics* + "short spoken response") acknowledging or directing ${agent.name} while keeping Hex held comfortably in your lap.`,
+    `Respond in character as Argon with a short 1-to-2 sentence reaction (*physical action in italics* + "short spoken response") acknowledging or directing ${agent.name} while staying close beside Hex in the sanctuary.`,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -504,7 +565,7 @@ async function generateArgonReactionToStaff(
     // fallback below
   }
 
-  return `*I reach down to pat ${agent.name}'s head while keeping my other arm steady around your waist.* "Good work, ${agent.name}. Leave the report right by the teapot."`;
+  return `*I reach down to pat ${agent.name}'s head while staying close beside you.* "Good work, ${agent.name}. Leave the report right by the teapot."`;
 }
 
 async function startServer() {
@@ -526,6 +587,104 @@ async function startServer() {
       // ignore
     }
     return next();
+  });
+
+  // GET /api/guy-diary: Reads local ARGON_GUY_DIARY.md ledger
+  app.get('/api/guy-diary', (_req, res) => {
+    try {
+      const diaryPath = path.join(__dirname, 'ARGON_GUY_DIARY.md');
+      if (fs.existsSync(diaryPath)) {
+        const content = fs.readFileSync(diaryPath, 'utf-8');
+        return res.json({ success: true, content });
+      }
+      return res.json({ success: true, content: '' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /api/guy-diary/append: Appends entry to ARGON_GUY_DIARY.md
+  app.post('/api/guy-diary/append', async (req, res) => {
+    try {
+      const {
+        title = 'Sanctuary Reconnaissance',
+        target_repo = 'DiscordiaDisco/hey_lawnmower_man',
+        targetRepo,
+        commit_receipt = 'Verified locally',
+        commitReceipt,
+        payload = 'Field telemetry and reconnaissance logged.',
+        field_note = '',
+        fieldNote,
+        author = 'Argon',
+        timestamp,
+        weatherLocation,
+      } = req.body || {};
+
+      const finalTargetRepo = target_repo || targetRepo || 'DiscordiaDisco/hey_lawnmower_man';
+      const finalCommitReceipt = commit_receipt || commitReceipt || 'Verified locally';
+      const finalFieldNote = field_note || fieldNote || 'No notes recorded.';
+      const finalAuthor = author || 'Argon';
+
+      const diaryPath = path.join(__dirname, 'ARGON_GUY_DIARY.md');
+      let currentContent = '';
+      if (fs.existsSync(diaryPath)) {
+        currentContent = fs.readFileSync(diaryPath, 'utf-8');
+      } else {
+        currentContent = [
+          '# 🕵️‍♂️ ARGON\'S GUY DIARY (`hey_lawnmower_man`)',
+          '*"The junk in your trunk" — Private Field Ledger & Internet Doings*',
+          '',
+          '---',
+        ].join('\n');
+      }
+
+      // Count existing entries to determine next Entry #
+      const entryMatches = currentContent.match(/## Entry #(\d+)/g) || [];
+      let nextNum = 1;
+      if (entryMatches.length > 0) {
+        const numbers = entryMatches.map((m) => {
+          const numMatch = m.match(/\d+/);
+          return numMatch ? parseInt(numMatch[0], 10) : 0;
+        });
+        nextNum = Math.max(...numbers, 0) + 1;
+      }
+      const entryNumberStr = String(nextNum).padStart(3, '0');
+
+      const nowFormatted = timestamp || new Date().toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const locationStamp = weatherLocation ? ` (${weatherLocation})` : '';
+
+      const entryBlock = [
+        '',
+        `## Entry #${entryNumberStr} — ${title}`,
+        `- **Timestamp:** ${nowFormatted}${locationStamp}`,
+        `- **Target Repo:** \`${finalTargetRepo}\``,
+        `- **Commit Receipt:** \`${finalCommitReceipt}\``,
+        `- **Payload:** ${payload}`,
+        `- **Field Note:** ${finalFieldNote}`,
+        `- **Logged By:** ${finalAuthor}`,
+      ].join('\n');
+
+      const updatedContent = `${currentContent.trimEnd()}\n${entryBlock}\n`;
+      fs.writeFileSync(diaryPath, updatedContent, 'utf-8');
+
+      return res.json({
+        success: true,
+        entryNumber: entryNumberStr,
+        entryBlock,
+        fullDiary: updatedContent,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return res.status(500).json({ error: msg });
+    }
   });
 
   // Gist GET proxy with fallback to seed drawers if GitHub API rate-limits
@@ -675,6 +834,327 @@ async function startServer() {
     }
   });
 
+  // 1-Tap GitHub Pages & Repo Quick-Fix & Deploy endpoint
+  app.post('/api/github/pages-quick-fix', async (req, res) => {
+    try {
+      const headerToken = (req.headers['x-github-token'] as string | undefined)?.trim();
+      const bodyToken = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+      const token = headerToken || bodyToken;
+
+      if (!token) {
+        return res.status(401).json({
+          ok: false,
+          error: 'GitHub Token is required. Please configure your token in System Settings.',
+        });
+      }
+
+      const {
+        owner: rawOwner = '',
+        repo: rawRepo = '',
+        repoFullName = '',
+        action = 'status',
+        branch = 'main',
+        path = '/',
+        cname = '',
+        filePath = '',
+        fileContent = '',
+        commitMessage = '',
+      } = req.body || {};
+
+      let owner = String(rawOwner || '').trim();
+      let repo = String(rawRepo || '').trim();
+
+      if ((!owner || !repo) && repoFullName) {
+        const parts = String(repoFullName).trim().split('/');
+        if (parts.length === 2) {
+          owner = parts[0].trim();
+          repo = parts[1].trim();
+        }
+      }
+
+      if (!owner || !repo) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Repository owner and repo name are required (e.g. owner: "DiscordiaDisco", repo: "hey_lawnmower_man").',
+        });
+      }
+
+      const ghHeaders: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'argon-hex-workbench',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+
+      const fetchFileSha = async (targetPath: string, targetBranch?: string): Promise<string | undefined> => {
+        try {
+          const cleanPath = targetPath.replace(/^\/+/, '');
+          const url = targetBranch
+            ? `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(cleanPath)}?ref=${encodeURIComponent(targetBranch)}`
+            : `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(cleanPath)}`;
+          const r = await fetch(url, { headers: ghHeaders });
+          if (r.ok) {
+            const d = (await r.json()) as { sha?: string };
+            return d?.sha;
+          }
+        } catch {
+          // ignore
+        }
+        return undefined;
+      };
+
+      if (action === 'status') {
+        const pagesRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+          headers: ghHeaders,
+        });
+        const pagesData = pagesRes.ok ? await pagesRes.json() : null;
+        let buildData = null;
+        if (pagesRes.ok) {
+          try {
+            const bRes = await fetch(
+              `https://api.github.com/repos/${owner}/${repo}/pages/builds/latest`,
+              { headers: ghHeaders }
+            );
+            if (bRes.ok) buildData = await bRes.json();
+          } catch {
+            // ignore
+          }
+        }
+        return res.json({
+          ok: pagesRes.ok,
+          status: pagesRes.status,
+          enabled: pagesRes.ok,
+          pages: pagesData,
+          build: buildData,
+          html_url: pagesData?.html_url || null,
+          cname: pagesData?.cname || null,
+          branch: pagesData?.source?.branch || null,
+          path: pagesData?.source?.path || null,
+          message: pagesRes.ok
+            ? 'GitHub Pages is active'
+            : pagesRes.status === 404
+            ? 'GitHub Pages is not currently enabled for this repository'
+            : `GitHub Pages status check: ${pagesRes.statusText}`,
+        });
+      }
+
+      if (action === 'enable_pages') {
+        let enableRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+          method: 'POST',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: {
+              branch: branch || 'main',
+              path: path || '/',
+            },
+          }),
+        });
+
+        if (enableRes.status === 409) {
+          enableRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+            method: 'PUT',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source: {
+                branch: branch || 'main',
+                path: path || '/',
+              },
+            }),
+          });
+        }
+
+        const data = await enableRes.json().catch(() => null);
+        return res.json({
+          ok: enableRes.ok,
+          status: enableRes.status,
+          pages: data,
+          html_url: data?.html_url || null,
+          error: enableRes.ok ? undefined : data?.message || enableRes.statusText,
+        });
+      }
+
+      if (action === 'set_cname') {
+        const cleanCname = String(cname || '').trim();
+        const cnameSha = await fetchFileSha('CNAME', branch);
+        const cnameContentBase64 = Buffer.from(`${cleanCname}\n`, 'utf-8').toString('base64');
+        const commitRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/CNAME`, {
+          method: 'PUT',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: `Configure custom domain CNAME: ${cleanCname}`,
+            content: cnameContentBase64,
+            branch: branch || 'main',
+            ...(cnameSha ? { sha: cnameSha } : {}),
+          }),
+        });
+
+        const pagesPutRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+          method: 'PUT',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cname: cleanCname || null,
+          }),
+        });
+
+        const pagesData = await pagesPutRes.json().catch(() => null);
+        return res.json({
+          ok: commitRes.ok || pagesPutRes.ok,
+          cname: cleanCname,
+          cnameFileCommitted: commitRes.ok,
+          pages: pagesData,
+          html_url: pagesData?.html_url || `https://${cleanCname}`,
+        });
+      }
+
+      if (action === 'commit_file') {
+        const targetPath = String(filePath || '').trim().replace(/^\/+/, '');
+        if (!targetPath) {
+          return res.status(400).json({ ok: false, error: 'filePath is required.' });
+        }
+        const sha = await fetchFileSha(targetPath, branch);
+        const contentBase64 = Buffer.from(fileContent || '', 'utf-8').toString('base64');
+        const commitRes = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(targetPath)}`,
+          {
+            method: 'PUT',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: commitMessage || `Update ${targetPath} via 1-shot quick fix`,
+              content: contentBase64,
+              branch: branch || 'main',
+              ...(sha ? { sha: sha } : {}),
+            }),
+          }
+        );
+        const commitData = await commitRes.json().catch(() => null);
+        return res.json({
+          ok: commitRes.ok,
+          status: commitRes.status,
+          path: targetPath,
+          sha: commitData?.content?.sha || null,
+          commit: commitData?.commit?.html_url || null,
+          error: commitRes.ok ? undefined : commitData?.message || commitRes.statusText,
+        });
+      }
+
+      if (action === 'full_deploy') {
+        const steps: Array<{ step: string; ok: boolean; detail?: string }> = [];
+
+        let pagesRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+          headers: ghHeaders,
+        });
+
+        let pagesData = pagesRes.ok ? await pagesRes.json() : null;
+
+        if (!pagesRes.ok) {
+          const createRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+            method: 'POST',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source: { branch: branch || 'main', path: path || '/' },
+            }),
+          });
+          if (createRes.ok || createRes.status === 409) {
+            steps.push({ step: 'enable_pages', ok: true, detail: `Enabled Pages on branch ${branch}` });
+            const recheck = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+              headers: ghHeaders,
+            });
+            if (recheck.ok) pagesData = await recheck.json();
+          } else {
+            const err = await createRes.json().catch(() => null);
+            steps.push({
+              step: 'enable_pages',
+              ok: false,
+              detail: err?.message || createRes.statusText,
+            });
+          }
+        } else {
+          if (pagesData?.source?.branch !== branch || pagesData?.source?.path !== path) {
+            const putRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+              method: 'PUT',
+              headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                source: { branch: branch || 'main', path: path || '/' },
+              }),
+            });
+            steps.push({
+              step: 'update_pages_source',
+              ok: putRes.ok,
+              detail: `Updated source to ${branch}:${path}`,
+            });
+            if (putRes.ok) pagesData = await putRes.json().catch(() => pagesData);
+          } else {
+            steps.push({ step: 'check_pages', ok: true, detail: `Pages already active on ${branch}` });
+          }
+        }
+
+        const cleanCname = String(cname || '').trim();
+        if (cleanCname) {
+          const cSha = await fetchFileSha('CNAME', branch);
+          const cContent = Buffer.from(`${cleanCname}\n`, 'utf-8').toString('base64');
+          const cRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/CNAME`, {
+            method: 'PUT',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              message: `Configure custom domain CNAME: ${cleanCname}`,
+              content: cContent,
+              branch: branch || 'main',
+              ...(cSha ? { sha: cSha } : {}),
+            }),
+          });
+          steps.push({
+            step: 'commit_cname',
+            ok: cRes.ok,
+            detail: cRes.ok ? `Committed CNAME (${cleanCname})` : 'Failed to commit CNAME file',
+          });
+
+          const pCname = await fetch(`https://api.github.com/repos/${owner}/${repo}/pages`, {
+            method: 'PUT',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cname: cleanCname }),
+          });
+          steps.push({
+            step: 'set_pages_cname',
+            ok: pCname.ok,
+            detail: pCname.ok ? `Set Pages domain to ${cleanCname}` : 'Pages CNAME update error',
+          });
+          if (pCname.ok) pagesData = await pCname.json().catch(() => pagesData);
+        }
+
+        let buildData = null;
+        try {
+          const bRes = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/pages/builds/latest`,
+            { headers: ghHeaders }
+          );
+          if (bRes.ok) buildData = await bRes.json();
+        } catch {
+          // ignore
+        }
+
+        const finalUrl = cleanCname
+          ? `https://${cleanCname}`
+          : pagesData?.html_url || `https://${owner}.github.io/${repo}/`;
+
+        return res.json({
+          ok: steps.every((s) => s.ok),
+          steps,
+          pages: pagesData,
+          build: buildData,
+          html_url: finalUrl,
+          cname: cleanCname || pagesData?.cname || null,
+        });
+      }
+
+      return res.status(400).json({ ok: false, error: `Unknown action: ${action}` });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
   // Separate Staff Agent Execution Endpoint (runs separately from main chat LLM)
   app.post('/api/staff-run', async (req, res) => {
     try {
@@ -684,12 +1164,16 @@ async function startServer() {
         jobPrompt = '',
         lorebook = {},
         recentHistory = [],
+        telemetryHeader = '',
+        telemetryContext = '',
       } = req.body as {
         agent: StaffAgent;
         jobName?: string;
         jobPrompt?: string;
         lorebook?: LorebookMap;
         recentHistory?: Array<{ role: string; text: string; senderName?: string }>;
+        telemetryHeader?: string;
+        telemetryContext?: string;
       };
 
       const transcript = Array.isArray(recentHistory)
@@ -699,6 +1183,7 @@ async function startServer() {
             .join('\n')
         : '';
 
+      const liveSensors = (telemetryHeader || telemetryContext || '').trim();
       const ai = getGenAIClient(resolveRequestApiKey(req));
       const { output, modelUsed } = await executeLiveStaffAgentCall(
         ai,
@@ -706,7 +1191,8 @@ async function startServer() {
         jobName || agent.jobTitle || 'Assigned Job',
         jobPrompt,
         lorebook,
-        transcript
+        transcript,
+        liveSensors
       );
 
       let argonReaction = '';
@@ -818,10 +1304,8 @@ async function startServer() {
             }
           }
         }
-        const combinedText =
-          turn.role === 'user' && turn.telemetryHeader
-            ? `${turn.telemetryHeader}\n\n${turn.text}`
-            : turn.text;
+        // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
+        const combinedText = turn.text;
         if (combinedText) {
           parts.push({ text: combinedText });
         }
@@ -833,7 +1317,8 @@ async function startServer() {
         }
       }
 
-      // Current user message turn with prepended [TELEMETRY | ...] header and [Attached Image Description: ...]
+      // Current user message turn — telemetry is NOT prepended to Argon's prompt on every turn!
+      // Haiku the puppy receives live telemetry and reports time/weather/storm warnings when asked or commanded.
       const currentParts: Part[] = [];
       const attachedDescriptions: string[] = [];
       if (images && Array.isArray(images)) {
@@ -855,9 +1340,7 @@ async function startServer() {
           }
         }
       }
-      const fullUserPrompt = telemetryHeader
-        ? `${telemetryHeader}\n\n${userMessageText}`
-        : userMessageText;
+      const fullUserPrompt = userMessageText;
       currentParts.push({ text: fullUserPrompt });
       contents.push({
         role: 'user',
@@ -1062,7 +1545,8 @@ async function startServer() {
               jobName,
               taskInput,
               workingLorebook,
-              recentTranscript
+              recentTranscript,
+              telemetryHeader || ''
             );
             const liveStaffOutput = staffRunResult.output;
 
@@ -1161,6 +1645,61 @@ async function startServer() {
             toolBadges.push({
               tool: 'compress_argon_journal',
               label: `🧠 Compressed Memory: "${summaryTitle}"`,
+            });
+          } else if (fnName === 'edit_argon_memory') {
+            const memoryId = String(args.memory_id || args.id || '').trim();
+            const updatedTitle = args.title !== undefined ? String(args.title).trim() : undefined;
+            const updatedSummary = String(args.summary || args.compressed_summary || '').trim();
+            workingArgonBook = editArgonMemoryBlock(
+              workingArgonBook,
+              memoryId,
+              { title: updatedTitle, summary: updatedSummary }
+            );
+            let gistSynced = false;
+            if (githubToken && githubToken.trim()) {
+              const ok = await patchGistDrawer(
+                gistId || DEFAULT_GIST_ID,
+                githubToken.trim(),
+                GIST_ARGON_BOOK_FILENAME,
+                JSON.stringify(workingArgonBook, null, 2)
+              );
+              if (ok) gistSynced = true;
+            }
+            toolResult = {
+              status: 'updated_argon_memory_block',
+              memoryId,
+              memorySectionCount: workingArgonBook.memorySection.length,
+              gistSynced,
+            };
+            toolBadges.push({
+              tool: 'edit_argon_memory',
+              label: `🧠 Edited Memory: "${updatedTitle || memoryId}"`,
+            });
+          } else if (fnName === 'delete_argon_memory') {
+            const memoryId = String(args.memory_id || args.id || '').trim();
+            workingArgonBook = deleteArgonMemoryBlock(
+              workingArgonBook,
+              memoryId
+            );
+            let gistSynced = false;
+            if (githubToken && githubToken.trim()) {
+              const ok = await patchGistDrawer(
+                gistId || DEFAULT_GIST_ID,
+                githubToken.trim(),
+                GIST_ARGON_BOOK_FILENAME,
+                JSON.stringify(workingArgonBook, null, 2)
+              );
+              if (ok) gistSynced = true;
+            }
+            toolResult = {
+              status: 'deleted_argon_memory_block',
+              deletedMemoryId: memoryId,
+              memorySectionCount: workingArgonBook.memorySection.length,
+              gistSynced,
+            };
+            toolBadges.push({
+              tool: 'delete_argon_memory',
+              label: `🧠 Pruned Memory: "${memoryId}"`,
             });
           } else if (fnName === 'draw_on_whiteboard') {
             const parsed = parseArgonWhiteboardResponse(
@@ -1290,7 +1829,7 @@ async function startServer() {
         githubToken = '',
         gistId = DEFAULT_GIST_ID,
       } = req.body as {
-        action?: 'write' | 'compress';
+        action?: 'write' | 'compress' | 'edit_memory' | 'delete_memory';
         model?: string;
         argonBook?: ArgonJournalState;
         hexBook?: JournalEntry[];
@@ -1298,6 +1837,12 @@ async function startServer() {
         telemetryHeader?: string;
         githubToken?: string;
         gistId?: string;
+        memoryId?: string;
+        memoryTitle?: string;
+        memorySummary?: string;
+        id?: string;
+        title?: string;
+        summary?: string;
       };
 
       const ai = getGenAIClient(resolveRequestApiKey(req));
@@ -1329,6 +1874,45 @@ async function startServer() {
               .map((e) => `[${e.formattedDate} | ${e.category}] "${e.title}": ${e.content}`)
               .join('\n\n')
           : '(Hex has not written any entries in her book yet)';
+
+      if (action === 'edit_memory') {
+        const targetId = String((req.body as any).memoryId || (req.body as any).id || '').trim();
+        const updatedBook = editArgonMemoryBlock(argonBook, targetId, {
+          title: (req.body as any).memoryTitle || (req.body as any).title,
+          summary: (req.body as any).memorySummary || (req.body as any).summary,
+        });
+        let gistSynced = false;
+        if (githubToken && githubToken.trim()) {
+          gistSynced = await patchGistDrawer(
+            gistId || DEFAULT_GIST_ID,
+            githubToken.trim(),
+            GIST_ARGON_BOOK_FILENAME,
+            JSON.stringify(updatedBook, null, 2)
+          );
+        }
+        return res.json({
+          updatedArgonBook: updatedBook,
+          gistSynced,
+        });
+      }
+
+      if (action === 'delete_memory') {
+        const targetId = String((req.body as any).memoryId || (req.body as any).id || '').trim();
+        const updatedBook = deleteArgonMemoryBlock(argonBook, targetId);
+        let gistSynced = false;
+        if (githubToken && githubToken.trim()) {
+          gistSynced = await patchGistDrawer(
+            gistId || DEFAULT_GIST_ID,
+            githubToken.trim(),
+            GIST_ARGON_BOOK_FILENAME,
+            JSON.stringify(updatedBook, null, 2)
+          );
+        }
+        return res.json({
+          updatedArgonBook: updatedBook,
+          gistSynced,
+        });
+      }
 
       const candidateModels = Array.from(
         new Set([
@@ -2093,17 +2677,29 @@ async function startServer() {
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n  VITE v8.3.0  ready in 120 ms\n\n  ➜  Local:   http://localhost:${PORT}/\n  ➜  Network: http://0.0.0.0:${PORT}/\n`);
+      console.log(`ARGON & HEX WORKBENCH server listening on http://localhost:${PORT}`);
+    });
   } else {
-    const vite = await createViteServer({
+    const vitePromise = createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
-  }
+    app.use(async (req, res, next) => {
+      try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
+    });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`ARGON & HEX WORKBENCH server listening on http://localhost:${PORT}`);
-  });
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`\n  VITE v8.3.0  ready in 120 ms\n\n  ➜  Local:   http://localhost:${PORT}/\n  ➜  Network: http://0.0.0.0:${PORT}/\n`);
+      console.log(`ARGON & HEX WORKBENCH server listening on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();

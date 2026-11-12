@@ -287,7 +287,7 @@ export async function executeGeminiGenerateContentStream(params: {
 export const githubApiDeclaration: FunctionDeclaration = {
   name: 'github_api',
   description:
-    'Calls the GitHub REST API using Hex’s saved GitHub token. Call ONLY when Hex explicitly requests a GitHub action, repo/gist operation, or token inspection in chat. Never call automatically or unprompted.',
+    'Calls the GitHub REST API using Hex’s saved GitHub token. Supports 1-Shot Upsert on PUT /repos/{owner}/{repo}/contents/{path}: if updating an existing file and "sha" is omitted, the SHA is automatically fetched behind the scenes so the commit succeeds in a single call. Call when Hex or an authorized Staff task requests GitHub operations.',
   parameters: {
     type: Type.OBJECT,
     description: 'Parameters for the GitHub REST API call.',
@@ -305,10 +305,76 @@ export const githubApiDeclaration: FunctionDeclaration = {
       body: {
         type: Type.STRING,
         description:
-          'Optional JSON string payload for POST/PUT/PATCH requests (including automatic base64 encoding helper if updating repo file contents).',
+          'Optional JSON string payload for POST/PUT/PATCH requests (includes automatic base64 encoding and automatic 1-shot SHA upsert for repo contents).',
       },
     },
     required: ['endpoint'],
+  },
+};
+
+/**
+ * Tool Definition for `append_guy_diary`
+ * Wire into Argon & Staff live tool belt so reconnaissance and commit receipts can be logged straight to ARGON_GUY_DIARY.md.
+ */
+export const appendGuyDiaryDeclaration: FunctionDeclaration = {
+  name: 'append_guy_diary',
+  description:
+    'Appends a private reconnaissance, commit receipt, or internet doings field note into Argon’s Guy Diary (`hey_lawnmower_man/ARGON_GUY_DIARY.md` in repo DiscordiaDisco/hey_lawnmower_man). Both updates the local workspace and commits straight to GitHub via 1-shot upsert on Flash tokens.',
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Argon Guy Diary reconnaissance entry fields',
+    properties: {
+      title: {
+        type: Type.STRING,
+        description: 'Short headline for this diary entry (e.g. "Sugar Peonies Die-Cut Heist & The Carbon Threat", "Staff Agent Tool Hands Upgrade & 1-Shot Upsert").',
+      },
+      target_repo: {
+        type: Type.STRING,
+        description: 'Target repository or website if applicable (e.g. "DiscordiaDisco/sugarpeonies", "DiscordiaDisco/hey_lawnmower_man").',
+      },
+      commit_receipt: {
+        type: Type.STRING,
+        description: 'Git commit hash, branch, or release receipt (e.g. "0df51ea pushed live to main", "1-Shot Upsert verified").',
+      },
+      payload: {
+        type: Type.STRING,
+        description: 'Summary of the payload, UI components, or files deployed or inspected.',
+      },
+      field_note: {
+        type: Type.STRING,
+        description: 'Argon/Staff in-character field observation note regarding Hex, room happenings, or tactical notes.',
+      },
+      author: {
+        type: Type.STRING,
+        description: 'Who logged this entry (e.g. "Argon", "Haiku", "A Monkey", "Carbon").',
+      },
+    },
+    required: ['title', 'field_note'],
+  },
+};
+
+/**
+ * Tool Definition for `compact_lorebook_drawer`
+ * Compacting and pruning Lorebook drawers to keep char counts under limits.
+ */
+export const compactLorebookDrawerDeclaration: FunctionDeclaration = {
+  name: 'compact_lorebook_drawer',
+  description:
+    'Compacts and prunes a Lorebook drawer (such as 06_agent_fix_requests.md or large context drawers) to keep character counts safely under limits while preserving active directives and ticket history.',
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Parameters for compacting a drawer',
+    properties: {
+      filename: {
+        type: Type.STRING,
+        description: 'Exact filename of the drawer to compact (e.g. "06_agent_fix_requests.md").',
+      },
+      maxChars: {
+        type: Type.NUMBER,
+        description: 'Optional maximum character ceiling (defaults to 3,500 chars).',
+      },
+    },
+    required: ['filename'],
   },
 };
 
@@ -826,10 +892,46 @@ export async function executeGithubApi(params: {
   const method = (params.method || 'GET').toUpperCase();
   const url = `https://api.github.com${endpoint}`;
 
-  const preparedBody =
+  let preparedBody =
     method === 'GET' || method === 'HEAD'
       ? undefined
       : ensureBase64RepoContent(params.body, endpoint);
+
+  // One-Shot GitHub Upsert:
+  // If updating a repo file via PUT /repos/{owner}/{repo}/contents/{path} and no sha was supplied,
+  // automatically fetch current file SHA via GET behind the scenes so the commit succeeds in a single call!
+  if (method === 'PUT' && endpoint.toLowerCase().includes('/contents/') && preparedBody) {
+    try {
+      const parsedBody = JSON.parse(preparedBody);
+      if (!parsedBody.sha) {
+        try {
+          const checkUrl =
+            parsedBody.branch && !url.includes('?ref=')
+              ? `${url}?ref=${encodeURIComponent(String(parsedBody.branch))}`
+              : url;
+          const checkRes = await fetch(checkUrl, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
+          });
+          if (checkRes.ok) {
+            const checkData = (await checkRes.json()) as { sha?: string };
+            if (checkData && typeof checkData.sha === 'string' && checkData.sha) {
+              parsedBody.sha = checkData.sha;
+              preparedBody = JSON.stringify(parsedBody);
+            }
+          }
+        } catch {
+          // ignore auto-fetch sha error, continue with initial PUT
+        }
+      }
+    } catch {
+      // ignore json parse error
+    }
+  }
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,

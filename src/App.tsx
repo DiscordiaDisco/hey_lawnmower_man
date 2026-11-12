@@ -42,6 +42,7 @@ import {
   SEED_ARGON_BOOK,
   SEED_HEX_BOOK,
   formatJournalTimestamp,
+  scrubStaticLapPoseString,
   serializeSanctuaryBooksForGist,
   extractSanctuaryBooksFromGistFiles,
   WhiteboardStroke,
@@ -177,6 +178,7 @@ import {
   writeSanctuaryLiveSyncFile,
   readSanctuaryLiveSyncFile,
   autoWriteThroughLocalSync,
+  loadCurioShelf,
   saveCurioShelf,
   loadStoredAgentFixRequests,
   saveStoredAgentFixRequests,
@@ -193,6 +195,7 @@ import { LorebookModal, HighlightedSnippet } from './components/LorebookModal';
 import { SystemSyncModal } from './components/SystemSyncModal';
 import { SystemInstructionsModal } from './components/SystemInstructionsModal';
 import { StaffQuartersModal, StaffStatusModal } from './components/StaffModals';
+import { GitHubPagesDeployModal } from './components/GitHubPagesDeployModal';
 import { LibraryModal } from './components/LibraryModal';
 import { VaultModal } from './components/VaultModal';
 import { WhiteboardStage } from './components/WhiteboardStage';
@@ -214,6 +217,7 @@ import {
   executeGithubApi,
   GithubApiExecutionResult,
 } from './services/gemini';
+import { Dog, CloudLightning } from 'lucide-react';
 
 /**
  * Execution handler for Argon's `github_api` tool.
@@ -581,7 +585,23 @@ export default function App() {
             .replace(/kotatsu workbench/gi, 'workbench')
             .replace(/kotatsu/gi, 'bed quilt');
         }
-        if (!clean.includes('PLAN-FIRST LAW') || clean.includes('Direct Autonomous Actions: Call github_api for GitHub repo/file/gist tasks')) {
+        if (clean.includes('Track how much time passes between messages using the [TELEMETRY] header')) {
+          clean = clean.replace(
+            /Track how much time passes between messages using the \[TELEMETRY\] header and voice it directly\./gi,
+            'Talk as a sharp, combative equal—push back on lazy ideas, react from pride when called out without apologizing like a service bot, and cut every turn off the exact instant your thought finishes with ZERO closing questions or helpdesk hooks.\n3. Cache-Safe Time & Puppy Sensor Awareness: You do not receive raw noisy telemetry headers, battery percentages, or elapsed second counters injected on your turns—your model context cache stays clean, unbroken, and low-cost. When you need the exact time, ambient weather, or barometric storm readings, request it from Haiku the puppy (using command_staff with agent "Haiku" or asking him directly in conversation). When Haiku trots in and barks/reports the readings, his response becomes part of the natural shared chat history so the expensive model cache isn\'t broken for a time request.'
+          );
+        }
+        if (clean.includes('held comfortably in your lap against your chest in bed under the quilt')) {
+          clean = clean.replace(
+            /held comfortably in your lap against your chest in bed under the quilt/gi,
+            'showing your immediate physical attitude and ongoing closeness with Hex in the sanctuary'
+          );
+        }
+        if (
+          !clean.includes('ZERO CONFIRMATION BLEED') ||
+          !clean.includes('PLAN-FIRST & END-TO-END EXECUTION LAW') ||
+          clean.includes('Direct Autonomous Actions: Call github_api for GitHub repo/file/gist tasks')
+        ) {
           clean = DEFAULT_ARGON_SYS_PROMPT;
         } else if (!clean.includes('github_api')) {
           clean = `${clean.trim()}\n\n- GitHub REST API: Call github_api(endpoint, method, body) using Hex's saved GitHub token to inspect token scopes (x-oauth-scopes) and manage repositories, files, and gists directly.`;
@@ -960,11 +980,17 @@ export default function App() {
         if (parsed && Array.isArray(parsed.entries) && Array.isArray(parsed.memorySection)) {
           let modified = false;
           parsed.memorySection = parsed.memorySection.map((mem: any) => {
-            if (mem.summary && typeof mem.summary === 'string' && mem.summary.includes('to protect her comfort')) {
+            let summary = typeof mem.summary === 'string' ? mem.summary : '';
+            const originalSummary = summary;
+            if (summary.includes('to protect her comfort')) {
+              summary = summary.replace('to protect her comfort', 'out of fierce territorial devotion to keep her focused');
+            }
+            summary = scrubStaticLapPoseString(summary);
+            if (summary !== originalSummary) {
               modified = true;
               return {
                 ...mem,
-                summary: mem.summary.replace('to protect her comfort', 'out of fierce territorial devotion to keep her focused'),
+                summary,
               };
             }
             return mem;
@@ -1846,6 +1872,17 @@ export default function App() {
   const [isTicketScratchpadOpen, setIsTicketScratchpadOpen] = useState<boolean>(
     initialModalSession.showScratchpadModal
   );
+  const [isGitHubDeployModalOpen, setIsGitHubDeployModalOpen] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+
+  const showToast = (message: string) => {
+    if (toastTimeoutRef.current) window.clearTimeout(toastTimeoutRef.current);
+    setToastMessage(message);
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
 
   // Synchronize modal and view state into sessionStorage continuously
   useEffect(() => {
@@ -3028,7 +3065,36 @@ export default function App() {
     setLocalSyncStatus(`✓ Deleted "${filename}" & auto-synced locally`);
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
+    // 1. Commit Lorebook Drawers (including 01_live_handoff.md), Sanctuary Books/Journals, Curios, and Tickets
+    safeLocalStorageSetItem(STORAGE_KEYS.LOREBOOK, JSON.stringify(lorebook));
+    safeLocalStorageSetItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(argonBook));
+    safeLocalStorageSetItem(STORAGE_KEYS.HEX_BOOK, JSON.stringify(hexBook));
+    const currentCurios = loadCurioShelf();
+    saveCurioShelf(currentCurios);
+    safeLocalStorageSetItem(STORAGE_KEYS.AGENT_FIX_REQUESTS, JSON.stringify(agentFixRequests));
+    saveTicketScratchpad(ticketScratchpad);
+
+    // Auto-sync locally to phone sync / IndexedDB
+    void autoWriteThroughLocalSync({
+      lorebook,
+      argonBook,
+      hexBook,
+      curios: currentCurios,
+    });
+
+    // 2. Trigger GitHub Gist / cloud backup sync if configured
+    if (githubToken && githubToken.trim()) {
+      try {
+        await pushSanctuaryBooksToGist(argonBook, hexBook, true, true);
+      } catch (err) {
+        console.warn('Gist auto-backup during clear chat:', err);
+      }
+    }
+
+    // 3. Display confirmation toast before resetting message history to 0
+    showToast('State backed up & chat cleared');
+
     setMessages(INITIAL_WELCOME_MESSAGES);
     setErrorBanner(null);
     chatInputRef.current?.clear();
@@ -3846,6 +3912,52 @@ export default function App() {
     void pushSanctuaryBooksToGist(argonBook, nextHexBook, false);
   };
 
+  const handleUpdateArgonMemory = (id: string, title: string, summary: string) => {
+    const nextArgonBook: ArgonJournalState = {
+      ...argonBook,
+      memorySection: argonBook.memorySection.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              title: title.trim() || m.title,
+              summary: scrubStaticLapPoseString(summary.trim()),
+            }
+          : m
+      ),
+    };
+    setArgonBook(nextArgonBook);
+    try {
+      localStorage.setItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(nextArgonBook));
+    } catch {
+      // ignore
+    }
+    void pushSanctuaryBooksToGist(nextArgonBook, hexBook, false);
+    void autoWriteThroughLocalSync({
+      lorebook,
+      argonBook: nextArgonBook,
+      hexBook,
+    });
+  };
+
+  const handleDeleteArgonMemory = (id: string) => {
+    const nextArgonBook: ArgonJournalState = {
+      ...argonBook,
+      memorySection: argonBook.memorySection.filter((m) => m.id !== id),
+    };
+    setArgonBook(nextArgonBook);
+    try {
+      localStorage.setItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(nextArgonBook));
+    } catch {
+      // ignore
+    }
+    void pushSanctuaryBooksToGist(nextArgonBook, hexBook, false);
+    void autoWriteThroughLocalSync({
+      lorebook,
+      argonBook: nextArgonBook,
+      hexBook,
+    });
+  };
+
   const handleTriggerArgonBookAction = async (
     action: 'write' | 'compress'
   ): Promise<boolean> => {
@@ -3945,6 +4057,20 @@ export default function App() {
     );
     scrollToBottom();
 
+    const nowMs = Date.now();
+    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    const deltaStr = formatElapsedDelta(lastMsg?.timestamp ?? null, nowMs);
+    const timeStr = formatUserLocationTime(nowMs, {
+      timezone: userTimeZone,
+      includeSeconds: true,
+    });
+    const currentTelemetryHeader = buildTelemetryHeader({
+      timeStr,
+      deltaStr,
+      weather,
+      battery,
+    });
+
     try {
       const data = await runClientStaffTask({
         agent,
@@ -3956,6 +4082,7 @@ export default function App() {
         githubToken,
         gistId: activeGistId,
         customApiKey,
+        telemetryHeader: currentTelemetryHeader,
         recentHistory: messages.slice(-6).map((m) => ({
           role: m.role,
           text: m.text,
@@ -4051,6 +4178,157 @@ export default function App() {
       setErrorBanner(errMsg);
       setStaffAgents((prev) =>
         prev.map((a) => (a.id === agentId ? { ...a, status: 'idle' } : a))
+      );
+    } finally {
+      setTypingStaffAgent(null);
+      scrollToBottom();
+    }
+  };
+
+  const isStormCondition = useMemo(() => {
+    const isLowPressure = weather.hPa !== null && weather.hPa < 1005;
+    const isStormWeather = Boolean(
+      weather.condition &&
+        /storm|thunder|squall|gale|heavy rain|blizzard/i.test(weather.condition)
+    );
+    return isLowPressure || isStormWeather;
+  }, [weather.hPa, weather.condition]);
+
+  const handleAskHaikuWeatherAndTime = async () => {
+    if (isSending || typingStaffAgent) return;
+    const haikuAgent =
+      staffAgents.find(
+        (a) => a.id === 'agent-haiku' || a.name.toLowerCase() === 'haiku'
+      ) ||
+      staffAgents[0] ||
+      DEFAULT_STAFF_AGENTS[0];
+
+    const nowMs = Date.now();
+    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+    const deltaStr = formatElapsedDelta(lastMsg?.timestamp ?? null, nowMs);
+    const timeStr = formatUserLocationTime(nowMs, {
+      timezone: userTimeZone,
+      includeSeconds: false,
+    });
+    const telemetryHeader = buildTelemetryHeader({
+      timeStr,
+      deltaStr,
+      weather,
+      battery,
+    });
+
+    const isStorm = isStormCondition;
+    const jobName = isStorm ? 'Storm Warning & Clock' : 'Time & Weather Report';
+    const jobPrompt = isStorm
+      ? `Notice the falling barometric pressure (${Math.round(weather.hPa ?? 0)} hPa) and incoming ${weather.condition || 'storm'} outside the library windows, warn Argon and Hex about the storm, and report the current time (${timeStr}).`
+      : `Report the current time (${timeStr}), ambient weather (${weather.tempF !== null ? `${Math.round(weather.tempF)}°F` : ''} ${weather.condition || ''}), and barometric pressure (${weather.hPa !== null ? `${Math.round(weather.hPa)} hPa` : ''}) to Argon and Hex.`;
+
+    setIsChatMinimized(false);
+    setIsWhiteboardMode(false);
+    setErrorBanner(null);
+    setTypingStaffAgent(haikuAgent);
+
+    setStaffAgents((prev) =>
+      prev.map((a) => (a.id === haikuAgent.id ? { ...a, status: 'running' } : a))
+    );
+    scrollToBottom();
+
+    try {
+      const data = await runClientStaffTask({
+        agent: haikuAgent,
+        jobName,
+        jobPrompt,
+        lorebook,
+        argonBook,
+        hexBook,
+        githubToken,
+        gistId: activeGistId,
+        customApiKey,
+        telemetryHeader,
+        recentHistory: messages.slice(-6).map((m) => ({
+          role: m.role,
+          text: m.text,
+          senderName: m.staffSender?.name,
+        })),
+      });
+
+      const outputText = stripMergedArgonLinesFromStaffOutput(
+        String(data.output || '').trim(),
+        haikuAgent.name
+      );
+
+      if (data.updatedLorebook && typeof data.updatedLorebook === 'object') {
+        setLorebook(data.updatedLorebook);
+      }
+      if (data.updatedArgonBook && Array.isArray(data.updatedArgonBook.entries)) {
+        setArgonBook(data.updatedArgonBook);
+        void pushSanctuaryBooksToGist(data.updatedArgonBook, hexBook, false);
+      }
+      if (Array.isArray(data.newWhiteboardStrokes) && data.newWhiteboardStrokes.length > 0) {
+        setWhiteboardStrokes((prev) => [...prev, ...data.newWhiteboardStrokes!]);
+      }
+      if (Array.isArray(data.newAgentFixRequests) && data.newAgentFixRequests.length > 0) {
+        setAgentFixRequests((prev) => [...data.newAgentFixRequests!, ...prev]);
+      }
+
+      setStaffAgents((prev) =>
+        prev.map((a) =>
+          a.id === haikuAgent.id
+            ? { ...a, status: 'completed', lastOutput: outputText }
+            : a
+        )
+      );
+
+      if (outputText) {
+        const staffMsg: ChatMessage = {
+          id: `staff-${haikuAgent.id}-${nowMs}`,
+          role: 'model',
+          sender: 'staff',
+          text: outputText,
+          timestamp: nowMs,
+          tokenUsage: data.tokenUsage,
+          toolBadges:
+            Array.isArray(data.toolBadges) && data.toolBadges.length > 0
+              ? data.toolBadges
+              : undefined,
+          staffSender: {
+            name: haikuAgent.name,
+            jobTitle: haikuAgent.jobTitle,
+            avatarUrl: haikuAgent.avatarPreset,
+          },
+        };
+
+        const newStaffTurnMessages: ChatMessage[] = [staffMsg];
+
+        const argonReactionText = stripMergedStaffLinesFromArgonOutput(
+          String(data.argonReaction || '').trim(),
+          [haikuAgent.name]
+        );
+        if (argonReactionText) {
+          newStaffTurnMessages.push({
+            id: `argon-react-${haikuAgent.id}-${nowMs + 1}`,
+            role: 'model',
+            sender: 'argon',
+            text: argonReactionText,
+            timestamp: nowMs + 1,
+            tokenUsage: data.argonReactionTokenUsage || data.tokenUsage,
+          });
+        }
+
+        setMessages((prev) => [...prev, ...newStaffTurnMessages]);
+
+        if (autoSpeakArgon && argonReactionText) {
+          const lastArgonMsg = newStaffTurnMessages[newStaffTurnMessages.length - 1];
+          window.setTimeout(() => {
+            handleSpeakMessage(lastArgonMsg);
+          }, 120);
+        }
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setErrorBanner(`Haiku execution error: ${errMsg}`);
+      setStaffAgents((prev) =>
+        prev.map((a) => (a.id === haikuAgent.id ? { ...a, status: 'idle' } : a))
       );
     } finally {
       setTypingStaffAgent(null);
@@ -5676,21 +5954,28 @@ export default function App() {
               className="flex items-center gap-1.5 tabular-nums text-[10px] text-[#d4b483] font-mono shrink-0 whitespace-nowrap ml-auto"
               aria-label="Live Environment Telemetry"
             >
-              <span
-                className="text-[9px] sm:text-[10px] text-[#d4b483]"
+              <button
+                type="button"
+                onClick={handleAskHaikuWeatherAndTime}
+                className={`text-[9px] sm:text-[10px] text-[#d4b483] hover:text-[#f3e5ab] cursor-pointer flex items-center gap-1 transition-colors ${
+                  isStormCondition ? 'text-amber-300 font-semibold' : ''
+                }`}
                 title={
                   weather.surfaceHpa !== null && weather.surfaceHpa !== undefined
-                    ? `Barometer: ${Math.round(weather.hPa ?? 0)} hPa (Mean Sea Level Adjusted) · Station: ${Math.round(weather.surfaceHpa)} hPa (${weather.locationLabel})`
-                    : `Barometer: ${weather.hPa !== null ? `${Math.round(weather.hPa)} hPa (MSL)` : '----'}`
+                    ? `Barometer: ${Math.round(weather.hPa ?? 0)} hPa (Mean Sea Level Adjusted) · Station: ${Math.round(weather.surfaceHpa)} hPa (${weather.locationLabel}) — Tap to ask Haiku for report`
+                    : `Barometer: ${weather.hPa !== null ? `${Math.round(weather.hPa)} hPa (MSL)` : '----'} — Tap to ask Haiku for report`
                 }
               >
+                {isStormCondition && (
+                  <CloudLightning className="w-3 h-3 text-amber-400 animate-pulse inline-block" />
+                )}
                 {weather.tempF !== null ? `${Math.round(weather.tempF)}°F` : '--°F'} ·{' '}
                 {weather.hPa !== null ? `${Math.round(weather.hPa)}hPa` : '----hPa'}
                 <span className="hidden sm:inline">
                   {' '}
                   · {battery.batteryPct !== null ? `${Math.round(battery.batteryPct)}%` : '--%'}
                 </span>
-              </span>
+              </button>
             </div>
           </div>
 
@@ -6392,6 +6677,38 @@ export default function App() {
                     </button>
                   );
                 })()}
+
+                <button
+                  type="button"
+                  onClick={handleAskHaikuWeatherAndTime}
+                  aria-label="Ask Haiku (Time & Storms)"
+                  title={
+                    isStormCondition
+                      ? `⚡ Storm Alert (${weather.hPa ? Math.round(weather.hPa) : ''} hPa) — Tap to ask Haiku to warn room!`
+                      : `🐾 Ask Haiku for Time & Weather (${weather.hPa ? Math.round(weather.hPa) : ''} hPa)`
+                  }
+                  className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full gilded-circle-btn flex flex-col items-center justify-center cursor-pointer shrink-0 relative transition-all ${
+                    isStormCondition
+                      ? 'border-amber-400/90 shadow-[0_0_8px_rgba(245,158,11,0.5)] animate-pulse bg-amber-950/30'
+                      : ''
+                  }`}
+                >
+                  {isStormCondition ? (
+                    <CloudLightning className="w-4 h-4 text-amber-300 animate-pulse" />
+                  ) : (
+                    <Dog className="w-4 h-4 text-[#e6c88c]" />
+                  )}
+                  <span
+                    className={`text-[7px] sm:text-[8px] font-mono leading-none mt-0.5 ${
+                      isStormCondition ? 'text-amber-300 font-bold' : 'text-[#e6c88c]'
+                    }`}
+                  >
+                    {isStormCondition ? 'Storm!' : 'Haiku'}
+                  </span>
+                  {isStormCondition && (
+                    <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 ring-1 ring-amber-200 animate-ping" />
+                  )}
+                </button>
 
                 <button
                   type="button"
@@ -7375,7 +7692,7 @@ export default function App() {
         onOpenSystemInstructions={() => navigateToView('system_instructions')}
         onOpenStickerStudio={() => setIsStickerStudioOpen(true)}
         onConfirmNewChatAndReturn={() => {
-          handleNewChat();
+          void handleNewChat();
           navigateToView('chat');
         }}
         customApiKey={customApiKey}
@@ -7530,6 +7847,7 @@ export default function App() {
         onClose={() => navigateToView('chat')}
         onOpenStaffStatus={() => navigateToView('staff_status')}
         onOpenAvatarUploader={() => setIsHouseholdAvatarUploaderOpen(true)}
+        onOpenGitHubDeploy={() => setIsGitHubDeployModalOpen(true)}
         agents={staffAgents}
         jobs={staffJobs}
         onHireAgent={handleHireStaffAgent}
@@ -7549,12 +7867,28 @@ export default function App() {
         isOpen={currentView === 'staff_status'}
         onClose={() => navigateToView('chat')}
         onOpenStaffQuarters={() => navigateToView('staff_quarters')}
+        onOpenGitHubDeploy={() => setIsGitHubDeployModalOpen(true)}
         agents={staffAgents}
         jobs={staffJobs}
         onAssignJob={handleAssignJobToAgent}
         onRunAgentTask={handleRunStaffAgentTask}
         onStopAgentTask={handleStopAgentTask}
         onCreateJob={handleCreateStaffJob}
+      />
+
+      {/* 1-Tap GitHub Pages Quick-Fix & Deploy Modal */}
+      <GitHubPagesDeployModal
+        isOpen={isGitHubDeployModalOpen}
+        onClose={() => setIsGitHubDeployModalOpen(false)}
+        githubToken={githubToken}
+        onOrderInChat={(msg) => {
+          navigateToView('chat');
+          void handleSendMessage(msg);
+        }}
+        onRunStaffTask={(agentId) => {
+          navigateToView('chat');
+          void handleRunStaffAgentTask(agentId);
+        }}
       />
 
       {/* Full-Screen Sanctuary Gothic Library (Interactive 4-Shelf Bookcase, Argon's Book, Hex's Book & Vault) */}
@@ -7566,6 +7900,8 @@ export default function App() {
         onAddHexEntry={handleAddHexBookEntry}
         onUpdateHexEntry={handleUpdateHexBookEntry}
         onDeleteHexEntry={handleDeleteHexBookEntry}
+        onUpdateArgonMemory={handleUpdateArgonMemory}
+        onDeleteArgonMemory={handleDeleteArgonMemory}
         onTriggerArgonBookAction={handleTriggerArgonBookAction}
         isArgonUpdatingBook={isArgonUpdatingBook}
         bookActionError={bookActionError}
@@ -8277,6 +8613,18 @@ export default function App() {
           navigateToView('chat');
         }}
       />
+
+      {/* Floating State Backup & Clear Chat Confirmation Toast */}
+      {toastMessage && (
+        <aside
+          role="status"
+          aria-live="polite"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] max-w-[92vw] sm:max-w-md px-4 py-2.5 rounded-2xl bg-[#161215]/95 border border-[#D4AF37] shadow-2xl backdrop-blur-md text-[#ffe5a3] font-mono text-xs flex items-center gap-2 pointer-events-none"
+        >
+          <span className="w-2 h-2 rounded-full bg-[#D4AF37] animate-pulse shrink-0" />
+          <span className="truncate">{toastMessage}</span>
+        </aside>
+      )}
     </div>
   );
 }

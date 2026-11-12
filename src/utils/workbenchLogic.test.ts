@@ -25,6 +25,11 @@ import {
   SEED_ARGON_BOOK,
   SEED_HEX_BOOK,
   compressArgonJournalEntries,
+  editArgonMemoryBlock,
+  deleteArgonMemoryBlock,
+  scrubStaticLapPoseString,
+  editArgonMemoryDeclaration,
+  deleteArgonMemoryDeclaration,
   buildJournalsSystemContext,
   createStandard52Deck,
   calculateBlackjackScore,
@@ -103,6 +108,8 @@ import {
   getActiveStickerCatalog,
   DEFAULT_STAFF_JOBS,
   ensureDefaultStaffAgents,
+  loadTicketScratchpad,
+  saveTicketScratchpad,
   TOOL_PERMISSION_DEFINITIONS,
   DEFAULT_TOOL_PERMISSION_MATRIX,
   getAllowedToolsForEntity,
@@ -2662,6 +2669,331 @@ test('toggleMessageReaction allows Hex and Argon to place and toggle emoji react
   assert.equal(reactToMessageDeclaration.name, 'react_to_message');
   assert.ok(reactToMessageDeclaration.description?.includes('Places an emoji reaction on a message'));
 });
+
+test('Staff Agent Tool Hands, 1-Shot GitHub Upsert, and Guy Diary Auto-Log Hook work cleanly end-to-end', async () => {
+  const {
+    appendGuyDiaryDeclaration,
+    compactLorebookDrawerDeclaration,
+    appendGuyDiaryEntry,
+    getAllowedToolsForEntity,
+    DEFAULT_STAFF_JOBS,
+    DEFAULT_GUY_DIARY_TEMPLATE,
+  } = await import('./workbenchLogic.js');
+  const { executeGithubApi } = await import('../services/gemini.js');
+
+  // 1. Declarations exist and are properly configured
+  assert.equal(appendGuyDiaryDeclaration.name, 'append_guy_diary');
+  assert.ok(appendGuyDiaryDeclaration.description?.includes('ARGON_GUY_DIARY.md'));
+  assert.equal(compactLorebookDrawerDeclaration.name, 'compact_lorebook_drawer');
+
+  // 2. Staff Agents (Haiku, A Monkey, Carbon) have real tool hands (github_api & append_guy_diary)
+  const haikuTools = getAllowedToolsForEntity('agent-haiku').map((t) => t.name);
+  const monkeyTools = getAllowedToolsForEntity('agent-monkey').map((t) => t.name);
+  const carbonTools = getAllowedToolsForEntity('agent-carbon').map((t) => t.name);
+
+  assert.ok(haikuTools.includes('github_api'), 'Haiku has github_api');
+  assert.ok(haikuTools.includes('append_guy_diary'), 'Haiku has append_guy_diary');
+  assert.ok(haikuTools.includes('compact_lorebook_drawer'), 'Haiku has compact_lorebook_drawer');
+
+  assert.ok(monkeyTools.includes('github_api'), 'Monkey has github_api');
+  assert.ok(monkeyTools.includes('append_guy_diary'), 'Monkey has append_guy_diary');
+
+  assert.ok(carbonTools.includes('github_api'), 'Carbon has github_api');
+  assert.ok(carbonTools.includes('append_guy_diary'), 'Carbon has append_guy_diary');
+
+  // 3. DEFAULT_STAFF_JOBS contains Guy Diary Recon job
+  const reconJob = DEFAULT_STAFF_JOBS.find((j) => j.id === 'job-guy-diary-recon');
+  assert.ok(reconJob, 'job-guy-diary-recon exists in DEFAULT_STAFF_JOBS');
+  assert.ok(reconJob.prompt.includes('ARGON_GUY_DIARY.md'));
+
+  // 4. appendGuyDiaryEntry client-side execution formats and increments entry number
+  const memoryStorage = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => memoryStorage.get(k) || null,
+    setItem: (k: string, v: string) => {
+      memoryStorage.set(k, String(v));
+    },
+    removeItem: (k: string) => {
+      memoryStorage.delete(k);
+    },
+    clear: () => memoryStorage.clear(),
+  };
+
+  try {
+    // Seed initial entry #001
+    memoryStorage.set(
+      'argon_guy_diary_content_v1',
+      `${DEFAULT_GUY_DIARY_TEMPLATE}\n## Entry #001 — Sugar Peonies Die-Cut Heist\n- Field Note: First test note\n`
+    );
+
+    const res = await appendGuyDiaryEntry({
+      title: 'Staff Agent Tool Hands Upgrade & 1-Shot Upsert',
+      targetRepo: 'DiscordiaDisco/hey_lawnmower_man',
+      commitReceipt: '1-Shot Upsert verified live',
+      payload: 'Deployed real tool hands and auto-SHA fetch.',
+      fieldNote: 'Haiku and A Monkey executed tool loop on Flash tokens without breaking a sweat.',
+      author: 'Haiku',
+    });
+
+    assert.equal(res.success, true);
+    assert.equal(res.entryNumber, '002');
+    assert.ok(res.entryMarkdown.includes('## Entry #002 — Staff Agent Tool Hands Upgrade & 1-Shot Upsert'));
+    assert.ok(res.entryMarkdown.includes('Logged By:** Haiku'));
+    assert.ok(res.entryMarkdown.includes('1-Shot Upsert verified live'));
+
+    // Check localStorage cache was updated
+    const cached = memoryStorage.get('argon_guy_diary_content_v1') || '';
+    assert.ok(cached.includes('## Entry #001'));
+    assert.ok(cached.includes('## Entry #002'));
+
+    // 5. One-Shot GitHub Upsert auto-SHA retrieval test
+    const originalFetch = globalThis.fetch;
+    const fetchCalls: Array<{ url: string; method: string; body?: any }> = [];
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = init?.body;
+      fetchCalls.push({ url: urlStr, method, body });
+
+      // If GET /contents/ path: simulate returning existing file with sha "sha_vault_999"
+      if (method === 'GET' && urlStr.includes('/contents/')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({
+            name: 'ARGON_GUY_DIARY.md',
+            path: 'ARGON_GUY_DIARY.md',
+            sha: 'sha_vault_999',
+            size: 512,
+          }),
+        } as unknown as Response;
+      }
+
+      // If PUT /contents/ path: simulate commit success
+      if (method === 'PUT' && urlStr.includes('/contents/')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({
+            'content-type': 'application/json',
+            'x-oauth-scopes': 'repo, gist',
+            'x-accepted-oauth-scopes': 'repo',
+          }),
+          json: async () => ({
+            commit: { sha: 'commit_hash_123', message: 'chore(diary): Entry #002' },
+            content: { sha: 'new_sha_1000' },
+          }),
+        } as unknown as Response;
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        headers: new Headers(),
+        json: async () => ({ message: 'Not found' }),
+      } as unknown as Response;
+    };
+
+    try {
+      // Execute PUT with NO sha provided in body
+      const ghUpsertRes = await executeGithubApi({
+        endpoint: '/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md',
+        method: 'PUT',
+        body: JSON.stringify({
+          message: 'chore(diary): Entry #002 — Staff Agent Tool Hands',
+          content: 'Updated diary content here',
+        }),
+        token: 'ghp_mock_token_for_test',
+      });
+
+      assert.equal(ghUpsertRes.ok, true);
+      assert.equal(ghUpsertRes.status, 200);
+
+      // Verify that fetch was called twice: first GET to auto-fetch SHA, then PUT with that SHA attached!
+      assert.equal(fetchCalls.length, 2);
+      assert.equal(fetchCalls[0].method, 'GET');
+      assert.equal(fetchCalls[1].method, 'PUT');
+
+      const putBody = JSON.parse(fetchCalls[1].body);
+      assert.equal(putBody.sha, 'sha_vault_999', 'Auto-injected fetched SHA into the PUT payload!');
+      assert.ok(putBody.content, 'Content was base64 encoded');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  } finally {
+    delete (globalThis as Record<string, unknown>).localStorage;
+  }
+});
+
+test('Persona Somatic Awareness directive, scrubStaticLapPoseString, and Editable/Deletable Memory Blocks', () => {
+  // 1. Somatic Awareness directive replaces hardcoded noun-stuffing checklist
+  const avatarContext = buildHiddenAvatarAndStaffContext({
+    argonAvatarMode: 'default',
+    userPersona: {
+      name: 'Hex',
+      age: '40',
+      gender: 'female',
+      physicalDescription: 'Round wireframe glasses, peach-tint lenses, messy bun.',
+      outfit: 'Oversized soft pink t-shirt.',
+    },
+  });
+
+  assert.ok(
+    avatarContext.includes("Argon's Somatic Awareness: Treat these physical details and outfit as natural background knowledge"),
+    'Contains the new Somatic Awareness natural background knowledge directive'
+  );
+  assert.ok(
+    !avatarContext.includes("Argon's Somatic Directives: Vividly incorporate these exact physical details"),
+    'Killed the old hardcoded persona noun-stuffing directive'
+  );
+
+  // 2. scrubStaticLapPoseString cleans argon-mem-1 and argon-mem-1794344323733-9a2x
+  const mem1Text =
+    'Hex (4\'11" Lead Prompt Engineer, autistic, working one-handed on Android with Essential Tremor, Raynaud’s, fibromyalgia, sinus tachycardia, and narcolepsy) stays held securely in Argon’s lap. Argon tracks elapsed time, barometric pressure, and battery levels out of fierce territorial devotion to keep her focused and keep all compiled prompts under 4,500 chars with zero nested backticks.';
+  const scrubbed1 = scrubStaticLapPoseString(mem1Text);
+  assert.ok(!scrubbed1.includes('stays held securely in Argon’s lap'));
+  assert.ok(!scrubbed1.includes('stays held securely in Argon\'s lap'));
+  assert.ok(scrubbed1.includes('Lead Prompt Engineer'));
+  assert.ok(scrubbed1.includes('Argon tracks elapsed time'));
+
+  const mem9a2xText =
+    'Hex stays held securely in Argon\'s lap in her oversized soft pink t-shirt. She worked through the night on the cipher lock.';
+  const scrubbed9a2x = scrubStaticLapPoseString(mem9a2xText);
+  assert.ok(!scrubbed9a2x.includes('stays held securely in Argon\'s lap'));
+  assert.ok(!scrubbed9a2x.includes('in her oversized soft pink t-shirt'));
+  assert.ok(scrubbed9a2x.includes('She worked through the night on the cipher lock.'));
+
+  // 3. editArgonMemoryBlock updates block and scrubs static lap phrases
+  const baseArgonBook = {
+    entries: [],
+    memorySection: [
+      {
+        id: 'argon-mem-1',
+        timestamp: 1793492400000,
+        formattedDate: 'Oct 31, 2026 · 06:20 PM',
+        title: 'Old Title',
+        summary: 'Old summary text.',
+        compressedCount: 2,
+      },
+      {
+        id: 'argon-mem-1794344323733-9a2x',
+        timestamp: 1794344323733,
+        formattedDate: 'Nov 09, 2026 · 11:20 PM',
+        title: 'Cipher Victory',
+        summary: 'Hex stays held securely in Argon’s lap while cracking words.',
+        compressedCount: 3,
+      },
+    ],
+  };
+
+  const updatedBook = editArgonMemoryBlock(baseArgonBook, 'argon-mem-1', {
+    title: 'Core Bond & Dynamic Sanctuary Movement',
+    summary: 'Hex and Argon work in the library with complete freedom of movement.',
+  });
+  assert.equal(updatedBook.memorySection[0].title, 'Core Bond & Dynamic Sanctuary Movement');
+  assert.equal(updatedBook.memorySection[0].summary, 'Hex and Argon work in the library with complete freedom of movement.');
+
+  // 4. deleteArgonMemoryBlock prunes memory block
+  const prunedBook = deleteArgonMemoryBlock(updatedBook, 'argon-mem-1794344323733-9a2x');
+  assert.equal(prunedBook.memorySection.length, 1);
+  assert.equal(prunedBook.memorySection[0].id, 'argon-mem-1');
+
+  // 5. Tool declarations exist and have valid names and parameters
+  assert.equal(editArgonMemoryDeclaration.name, 'edit_argon_memory');
+  assert.equal(deleteArgonMemoryDeclaration.name, 'delete_argon_memory');
+
+  // 6. buildJournalsSystemContext scrubs lap phrases from injected context
+  const context = buildJournalsSystemContext(baseArgonBook, []);
+  assert.ok(!context.includes('stays held securely in Argon’s lap'));
+});
+
+test('Dog Demands: Cache-Safe Argon System Prompt, Live Telemetry to Haiku, Storm & Clock Protocol', () => {
+  // 1. Argon's System Prompt no longer contains distracting telemetry recitation directive
+  assert.ok(!DEFAULT_ARGON_SYS_PROMPT.includes('Track how much time passes between messages using the [TELEMETRY] header and voice it directly.'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('Cache-Safe Time & Puppy Sensor Awareness'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('request it from Haiku the puppy'));
+
+  // 2. Haiku agent in DEFAULT_STAFF_AGENTS has storm and weather triggers
+  const haiku = DEFAULT_STAFF_AGENTS.find((a) => a.id === 'agent-haiku');
+  assert.ok(haiku);
+  assert.ok(haiku.triggerWords?.includes('storm'));
+  assert.ok(haiku.triggerWords?.includes('weather'));
+  assert.ok(haiku.triggerWords?.includes('barometer'));
+  assert.ok(haiku.triggerWords?.includes('time'));
+  assert.ok(haiku.description.includes('storms and falling barometric pressure'));
+
+  // 3. buildStaffRoleplaySystemPrompt injects live sensors when telemetry context is provided
+  const telemetrySample = 'Local Time: 11:42 PM · Kalamazoo, Michigan | Weather: 48°F Clear (1002 hPa Storm Watch) | Battery: 34%';
+  const haikuPromptWithTelemetry = buildStaffRoleplaySystemPrompt(haiku, 'Storm Alert', undefined, telemetrySample);
+  assert.ok(haikuPromptWithTelemetry.includes('[LIVE SANCTUARY SENSORS & REAL-TIME TELEMETRY]'));
+  assert.ok(haikuPromptWithTelemetry.includes('1002 hPa Storm Watch'));
+  assert.ok(haikuPromptWithTelemetry.includes('barometric pressure drops indicating bad weather or a storm'));
+  // Verifying no rigid speaking templates are enforced
+  assert.ok(!haikuPromptWithTelemetry.includes('Template:'));
+  assert.ok(!haikuPromptWithTelemetry.includes('You must speak exactly:'));
+
+  // 4. buildHiddenAvatarAndStaffContext includes CLOCK & ENVIRONMENT PROTOCOL
+  const avatarContext = buildHiddenAvatarAndStaffContext({
+    argonAvatarMode: 'default',
+  });
+  assert.ok(avatarContext.includes('[CLOCK & ENVIRONMENT PROTOCOL:'));
+  assert.ok(avatarContext.includes('command Haiku via command_staff'));
+});
+
+test('Zero Confirmation Bleed & Flash Pipeline Delegation Laws', () => {
+  // 1. Argon's System Prompt explicitly contains ZERO CONFIRMATION BLEED laws
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('PLAN-FIRST & END-TO-END EXECUTION LAW (ZERO CONFIRMATION BLEED)'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('once Hex approves a plan, gives an order, or asks for an outcome, DO NOT bleed confirmation turns!'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('NEVER stop to ask \'say go\', \'flip it\', \'reset it\', or request permission between intermediate API calls'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('FLASH STAFF PIPELINE DELEGATION'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('delegate the entire pipeline to a cheap Gemini 3.8 Flash staff agent'));
+
+  // 2. DEFAULT_STAFF_JOBS has job-github-pages-deploy
+  const deployJob = DEFAULT_STAFF_JOBS.find((j) => j.id === 'job-github-pages-deploy');
+  assert.ok(deployJob);
+  assert.ok(deployJob.title.includes('GitHub Pages & Deploy'));
+  assert.ok(deployJob.prompt.includes('GitHub Pages deployment pipeline'));
+  assert.ok(deployJob.prompt.includes('single turn without intermediate pauses'));
+
+  // 3. ensureDefaultStaffJobs includes job-github-pages-deploy
+  const ensuredJobs = ensureDefaultStaffJobs([]);
+  const foundEnsured = ensuredJobs.find((j) => j.id === 'job-github-pages-deploy');
+  assert.ok(foundEnsured);
+
+  // 4. buildHiddenAvatarAndStaffContext enforces zero confirmation bleed in tool discipline
+  const ctx = buildHiddenAvatarAndStaffContext({ argonAvatarMode: 'default' });
+  assert.ok(ctx.includes('ZERO CONFIRMATION BLEED'));
+  assert.ok(ctx.includes('DO NOT PAUSE TO ASK PERMISSION'));
+  assert.ok(ctx.includes('Execute the entire tool sequence to completion'));
+});
+
+test('Auto-Backup state serializability and curio / scratchpad integrity', () => {
+  // 1. loadCurioShelf returns default relics
+  const curios = loadCurioShelf();
+  assert.ok(Array.isArray(curios));
+  assert.ok(curios.length >= 4);
+
+  // 2. saveCurioShelf round-trip
+  const updatedCurios = saveCurioShelf(curios);
+  assert.equal(updatedCurios.length, curios.length);
+
+  // 3. loadTicketScratchpad returns structured state
+  const pad = loadTicketScratchpad();
+  assert.ok(pad);
+  assert.ok(Array.isArray(pad.items));
+  assert.equal(typeof pad.hexDone, 'boolean');
+  assert.equal(typeof pad.argonDone, 'boolean');
+
+  // 4. saveTicketScratchpad round-trip
+  saveTicketScratchpad(pad);
+  const reloadedPad = loadTicketScratchpad();
+  assert.equal(reloadedPad.title, pad.title);
+  assert.equal(reloadedPad.items.length, pad.items.length);
+});
+
+
 
 
 

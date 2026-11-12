@@ -1138,6 +1138,8 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
                     badge.tool === 'write_argon_book_entry' ||
                     badge.tool === 'write_argon_journal' ||
                     badge.tool === 'compress_argon_journal' ||
+                    badge.tool === 'edit_argon_memory' ||
+                    badge.tool === 'delete_argon_memory' ||
                     badge.tool === 'read_journals'
                   ) {
                     onNavigateToView?.('journals');

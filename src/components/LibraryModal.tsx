@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   ALLOWED_JOURNAL_CATEGORIES,
   ArgonJournalState,
+  CompressedMemoryBlock,
   DEFAULT_GIST_ID,
   SECRET_LIBRARY_GIST_ID,
   GIST_ARGON_BOOK_FILENAME,
@@ -35,6 +36,8 @@ interface LibraryModalProps {
   onAddHexEntry: (title: string, category: JournalCategory, content: string) => void;
   onUpdateHexEntry: (id: string, title: string, category: JournalCategory, content: string) => void;
   onDeleteHexEntry: (id: string) => void;
+  onUpdateArgonMemory?: (id: string, title: string, summary: string) => void;
+  onDeleteArgonMemory?: (id: string) => void;
   onTriggerArgonBookAction: (action: 'write' | 'compress') => Promise<boolean>;
   isArgonUpdatingBook: boolean;
   bookActionError?: string | null;
@@ -206,6 +209,8 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   onAddHexEntry,
   onUpdateHexEntry,
   onDeleteHexEntry,
+  onUpdateArgonMemory,
+  onDeleteArgonMemory,
   onTriggerArgonBookAction,
   isArgonUpdatingBook,
   bookActionError,
@@ -227,6 +232,11 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   const [activeTab, setActiveTab] = useState<'bookcase' | 'argon' | 'hex' | 'red_yarn' | 'spines'>('bookcase');
   const [selectedSpineId, setSelectedSpineId] = useState<string | null>(null);
   const [librarySpines, setLibrarySpines] = useState<Record<string, LibrarySpineBook>>(() => loadLibrarySpines());
+
+  // Argon Memory Section Inline Editing State
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
+  const [editingMemoryTitle, setEditingMemoryTitle] = useState('');
+  const [editingMemorySummary, setEditingMemorySummary] = useState('');
   
   // Easter Egg Overlays
   // Curio & Trophy Cabinet + Secret Altar
@@ -1080,25 +1090,135 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
             {argonSubSection === 'memory' && (
               <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-[#16100d]/90 border border-[#8e6d3b]/50 text-xs font-mono text-[#d4b483]">
+                  🧠 <strong>[ 🧠 Memory Section ] — Permanent High-Density Archive:</strong> Injected directly into Argon&apos;s system prompt. You can freely edit or prune blocks below.
+                </div>
                 {argonBook.memorySection.length === 0 ? (
                   <div className="p-8 text-center text-sm font-serif text-[#a89078] bg-[#140e0b]/60 rounded-xl border border-[#8e6d3b]/30">
                     No compressed memories yet. When Argon compresses his journal, long-term synthesized memories will appear here.
                   </div>
                 ) : (
-                  argonBook.memorySection.map((mem) => (
-                    <article
-                      key={mem.id}
-                      className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/40 space-y-2"
-                    >
-                      <div className="flex items-center justify-between text-[10px] font-mono text-purple-300 border-b border-purple-500/30 pb-1.5">
-                        <span>🧠 Synthesized Memory Block</span>
-                        <span>{formatJournalTimestamp(mem.timestamp)}</span>
-                      </div>
-                      <div className="text-xs sm:text-sm text-purple-100 whitespace-pre-wrap font-serif leading-relaxed">
-                        {mem.summary}
-                      </div>
-                    </article>
-                  ))
+                  argonBook.memorySection.map((mem) => {
+                    const isEditing = editingMemoryId === mem.id;
+                    if (isEditing) {
+                      return (
+                        <article
+                          key={mem.id}
+                          className="p-4 rounded-xl bg-[#1a1216] border-2 border-[#d4af37] space-y-3"
+                        >
+                          <div className="flex items-center justify-between border-b border-[#8e6d3b]/40 pb-1.5 text-xs font-mono text-[#d4af37]">
+                            <span>✏️ Editing Memory Block ({mem.id})</span>
+                            <time className="text-[11px] font-mono text-[#d4b483]">
+                              🕒 {mem.formattedDate}
+                            </time>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-[#cbb693] uppercase tracking-wider">
+                              Memory Title
+                            </label>
+                            <input
+                              type="text"
+                              value={editingMemoryTitle}
+                              onChange={(e) => setEditingMemoryTitle(e.target.value)}
+                              className="w-full px-3 py-1.5 rounded-lg bg-[#140e0b] border border-[#d4af37]/60 text-xs font-mono text-[#f5ead8] focus:outline-none focus:border-[#d4af37]"
+                              placeholder="Memory block title..."
+                              aria-label="Edit memory title"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-mono text-[#cbb693] uppercase tracking-wider">
+                              Memory Summary
+                            </label>
+                            <textarea
+                              value={editingMemorySummary}
+                              onChange={(e) => setEditingMemorySummary(e.target.value)}
+                              rows={4}
+                              className="w-full px-3 py-2 rounded-lg bg-[#140e0b] border border-[#d4af37]/60 text-xs sm:text-sm font-serif-webtoon text-[#f5ead8] focus:outline-none focus:border-[#d4af37] resize-y"
+                              placeholder="High-density permanent memory synthesis..."
+                              aria-label="Edit memory summary"
+                            />
+                          </div>
+                          <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingMemoryId(null)}
+                              className="px-3 py-1 rounded-lg border border-[#6b5331]/60 text-xs font-mono text-[#cbb693] hover:bg-[#2b1e16] cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onUpdateArgonMemory?.(mem.id, editingMemoryTitle, editingMemorySummary);
+                                setEditingMemoryId(null);
+                              }}
+                              className="px-3 py-1 rounded-lg bg-gradient-to-r from-[#d4af37] to-[#e6a8b5] text-[#161215] font-bold text-xs font-mono shadow-sm active:scale-95 cursor-pointer"
+                            >
+                              [ 💾 Save Memory ]
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    }
+
+                    return (
+                      <article
+                        key={mem.id}
+                        className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/40 space-y-2 select-text"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-purple-500/30 pb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded bg-purple-900/60 border border-purple-400/50 text-[10px] font-mono text-purple-200">
+                              🧠 Synthesized Memory Block
+                            </span>
+                            <h3 className="text-sm font-serif font-bold text-[#e6c88c]">
+                              {mem.title}
+                            </h3>
+                          </div>
+                          <time className="text-[11px] font-mono text-purple-300 tabular-nums">
+                            🕒 {mem.formattedDate}
+                          </time>
+                        </div>
+                        <div className="text-xs sm:text-sm text-purple-100 whitespace-pre-wrap font-serif leading-relaxed">
+                          {mem.summary}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[10px] font-mono text-purple-300 border-t border-purple-500/20">
+                          <span>👁️ Injected Live into Argon&apos;s Prompt</span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingMemoryId(mem.id);
+                                setEditingMemoryTitle(mem.title);
+                                setEditingMemorySummary(mem.summary);
+                              }}
+                              aria-label={`Edit ${mem.title}`}
+                              className="px-2.5 py-1 rounded gilded-pill-btn text-[10px] font-semibold cursor-pointer"
+                            >
+                              [ ✏️ Edit ]
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (
+                                  typeof window !== 'undefined' &&
+                                  window.confirm &&
+                                  !window.confirm(`Delete memory block "${mem.title}"?`)
+                                ) {
+                                  return;
+                                }
+                                onDeleteArgonMemory?.(mem.id);
+                              }}
+                              aria-label={`Delete ${mem.title}`}
+                              className="px-2.5 py-1 rounded bg-red-950/80 hover:bg-red-900 border border-red-500/40 text-red-200 text-[10px] font-semibold cursor-pointer"
+                            >
+                              [ 🗑️ Delete ]
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })
                 )}
               </div>
             )}

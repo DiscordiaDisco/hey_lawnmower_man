@@ -235,6 +235,7 @@ interface StaffQuartersModalProps {
   onClose: () => void;
   onOpenStaffStatus: () => void;
   onOpenAvatarUploader?: () => void;
+  onOpenGitHubDeploy?: () => void;
   agents: StaffAgent[];
   jobs: StaffJobDescription[];
   onHireAgent: (agent: Omit<StaffAgent, 'id' | 'status'>) => void;
@@ -251,6 +252,7 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
   onClose,
   onOpenStaffStatus,
   onOpenAvatarUploader,
+  onOpenGitHubDeploy,
   agents,
   jobs,
   onHireAgent,
@@ -426,6 +428,16 @@ export const StaffQuartersModal: React.FC<StaffQuartersModalProps> = ({
           </h2>
 
           <div className="flex items-center gap-1 shrink-0">
+            {onOpenGitHubDeploy && (
+              <button
+                type="button"
+                onClick={onOpenGitHubDeploy}
+                className="h-9 px-2.5 rounded-full gilded-pill-btn text-[11px] font-semibold cursor-pointer whitespace-nowrap flex items-center gap-1 border-[#D4AF37]/80 text-[#ffe5a3] hover:bg-[#D4AF37]/20"
+                title="1-Tap GitHub Pages Quick-Fix & Deploy (Zero Confirmation Bleed)"
+              >
+                <span>🚀 Pages</span>
+              </button>
+            )}
             {onOpenAvatarUploader && (
               <button
                 type="button"
@@ -1103,6 +1115,7 @@ interface StaffStatusModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenStaffQuarters: () => void;
+  onOpenGitHubDeploy?: () => void;
   agents: StaffAgent[];
   jobs: StaffJobDescription[];
   onAssignJob: (agentId: string, jobId: string) => void;
@@ -1115,6 +1128,7 @@ export const StaffStatusModal: React.FC<StaffStatusModalProps> = ({
   isOpen,
   onClose,
   onOpenStaffQuarters,
+  onOpenGitHubDeploy,
   agents,
   jobs,
   onAssignJob,
@@ -1176,6 +1190,16 @@ export const StaffStatusModal: React.FC<StaffStatusModalProps> = ({
           </h2>
 
           <div className="flex items-center gap-1 shrink-0">
+            {onOpenGitHubDeploy && (
+              <button
+                type="button"
+                onClick={onOpenGitHubDeploy}
+                className="h-9 px-2.5 rounded-full gilded-pill-btn text-[11px] font-semibold cursor-pointer whitespace-nowrap flex items-center gap-1 border-[#D4AF37]/80 text-[#ffe5a3] hover:bg-[#D4AF37]/20"
+                title="1-Tap GitHub Pages Quick-Fix & Deploy (Zero Confirmation Bleed)"
+              >
+                <span>🚀 Pages</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onOpenStaffQuarters}

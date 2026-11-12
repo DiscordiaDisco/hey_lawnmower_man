@@ -8,6 +8,8 @@ import {
 import html2canvas from 'html2canvas-pro';
 import {
   githubApiDeclaration,
+  appendGuyDiaryDeclaration,
+  compactLorebookDrawerDeclaration,
   listVaultMediaDeclaration,
   readVaultMediaDeclaration,
   useArgonEyeDeclaration,
@@ -29,6 +31,8 @@ import {
 
 export {
   githubApiDeclaration,
+  appendGuyDiaryDeclaration,
+  compactLorebookDrawerDeclaration,
   listVaultMediaDeclaration,
   readVaultMediaDeclaration,
   useArgonEyeDeclaration,
@@ -122,6 +126,7 @@ export const STORAGE_KEYS = {
   THINKING_LEVEL: 'argon_thinking_level_v1',
   USER_PERSONA: 'argon_user_persona_v1',
   UI_BREADCRUMBS: 'argon_ui_breadcrumbs_v1',
+  GUY_DIARY_CONTENT: 'argon_guy_diary_content_v1',
 } as const;
 
 export type MaxHistoryTurns = 12 | 20 | 40 | 'all';
@@ -1614,6 +1619,18 @@ export const DEFAULT_STAFF_JOBS: StaffJobDescription[] = [
     prompt:
       'Fetch filed ledgers, clean spilled ink blotters, endure affectionate roasting from Hex and Argon, dodge bananas thrown by A Monkey, and timidly report on Sanctuary administrative status.',
   },
+  {
+    id: 'job-guy-diary-recon',
+    title: 'Guy Diary Recon & Commits',
+    prompt:
+      'Execute multi-step reconnaissance via github_api, inspect deployed commits or live web releases, and log the receipt straight into DiscordiaDisco/hey_lawnmower_man/ARGON_GUY_DIARY.md via append_guy_diary with 1-shot upsert on cheap Flash tokens.',
+  },
+  {
+    id: 'job-github-pages-deploy',
+    title: 'GitHub Pages & Deploy Pipeline',
+    prompt:
+      'Execute the end-to-end multi-step GitHub Pages deployment pipeline via github_api in a single turn without intermediate pauses: check repository Pages status, enable or update Pages on the target branch (main/gh-pages), configure custom CNAME domain, commit quick-fix files with 1-shot upsert, and report the live URL and deployment receipt.',
+  },
 ];
 
 export function ensureDefaultStaffJobs(savedJobs: StaffJobDescription[]): StaffJobDescription[] {
@@ -1782,14 +1799,31 @@ export const DEFAULT_STAFF_AGENTS: StaffAgent[] = [
     jobTitle: 'Good Boy',
     model: 'gemini-3.8-flash',
     description:
-      "A small golden retriever puppy with a little black tuxedo bow on his collar. Loyal puppy who performs tasks at Argon's command.",
+      "A small golden retriever puppy with a little black tuxedo bow on his collar. Loyal puppy who performs tasks at Argon's command, keeps track of the time, and alerts to storms and falling barometric pressure.",
     tonePrompt:
-      'Enthusiastic, loyal golden retriever puppy wearing a little black tuxedo bow; uses *italicized puppy actions* (tail wagging, paws tapping, adjusting his tuxedo bow, trotting over with papers) and affectionate yips/excited puppy speech.',
+      'Enthusiastic, loyal golden retriever puppy wearing a little black tuxedo bow; uses *italicized puppy actions* (tail wagging, paws tapping, adjusting his tuxedo bow, trotting over with papers, sniffing the air for rain) and affectionate yips/excited puppy speech.',
     assignedJobId: 'job-handoff-audit',
     status: 'idle',
     lastOutput: '',
     avatarPreset: 'haiku_bell',
-    triggerWords: ['good boy', 'treat', 'treats', 'tuxedo', 'paws', 'fetch', 'puppy', 'golden'],
+    triggerWords: [
+      'good boy',
+      'treat',
+      'treats',
+      'tuxedo',
+      'paws',
+      'fetch',
+      'puppy',
+      'golden',
+      'time',
+      'weather',
+      'storm',
+      'barometer',
+      'pressure',
+      'hpa',
+      'clock',
+      'rain',
+    ],
   },
   {
     id: 'agent-monkey',
@@ -2288,13 +2322,14 @@ export function stripMergedStaffLinesFromArgonOutput(
 export function buildStaffRoleplaySystemPrompt(
   agent: StaffAgent,
   jobName?: string,
-  enabledPermissions?: AgentToolPermissions
+  enabledPermissions?: AgentToolPermissions,
+  telemetryContext?: string
 ): string {
   const perms = enabledPermissions || getPermissionsForEntity(agent.id || agent.name);
   const enabledList = TOOL_PERMISSION_DEFINITIONS.filter((d) => perms[d.key])
     .map((d) => d.label)
     .join(', ');
-  return [
+  const lines = [
     `You are ${agent.name}, whose job title is "${agent.jobTitle}" in Argon & Hex's Gothic library workbench.`,
     `Character & Physical Appearance: ${agent.description}`,
     `Voice, Demeanor & Roleplay Style: ${agent.tonePrompt}`,
@@ -2303,8 +2338,17 @@ export function buildStaffRoleplaySystemPrompt(
     `1. You are typing directly into your OWN standalone chat bubble (sender: 'staff') as ${agent.name} using standard roleplay formatting: write physical actions in *single-asterisk italics* and spoken dialogue/barks/chitters in "double quotes".`,
     `2. STRICT SPEAKER SEPARATION: Write ONLY ${agent.name}'s own actions and speech! NEVER write dialogue, narration, or reactions for Argon or Hex inside your message bubble. Argon has his own separate message bubble.`,
     `3. NEVER use or repeat a static, pre-scripted, or canned opening line. Every message must be freshly written in the moment.`,
-    `4. If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, writing in Sanctuary Books, drawing on the Shared Whiteboard, playing a Parlor game, swapping an avatar/sticker, or submitting a Coding Agent fix ticket, call your enabled tool(s) directly and report what you did in character!`,
-  ].join('\n');
+    `4. REAL TOOL EXECUTION: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api with 1-shot upsert), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character!`,
+  ];
+
+  if (telemetryContext && telemetryContext.trim()) {
+    lines.push(
+      `[LIVE SANCTUARY SENSORS & REAL-TIME TELEMETRY]:\n${telemetryContext.trim()}`,
+      `You have direct real-time awareness of these sanctuary telemetry readings (local time, weather conditions, barometric pressure in hPa, battery level). If asked for the time or weather, or if the barometric pressure drops indicating bad weather or a storm, share the readings naturally in your own character voice as part of the conversation.`
+    );
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -2362,7 +2406,7 @@ export function buildHiddenAvatarAndStaffContext(params: {
 - Gender: ${(persona.gender || 'Not specified').trim()}
 - Physical Description: ${(persona.physicalDescription || 'Not specified').trim()}
 - Current Outfit: ${(persona.outfit || 'Not specified').trim()}
-*Argon's Somatic Directives: Vividly incorporate these exact physical details and current outfit into your physical contact, proximity observations, and dialogue.*`;
+*Argon's Somatic Awareness: Treat these physical details and outfit as natural background knowledge—let movement, room dynamics, and closeness breathe naturally without repeating a stock checklist of body parts or clothing items on every turn.*`;
 
   lines.push(
     `[HIDDEN AVATAR VISION (NOT SHOWN IN UI): Your current avatar mode is "${
@@ -2372,15 +2416,17 @@ export function buildHiddenAvatarAndStaffContext(params: {
     `[HEX AVATAR VISION (NOT SHOWN IN UI): ${hexVision}]`,
     personaContextBlock,
     `[LOYAL STAFF ROSTER (Commandable via command_staff tool): ${staffList}]`,
+    `[CLOCK & ENVIRONMENT PROTOCOL: Argon does not receive noisy telemetry headers, raw battery percentages, or clock seconds in his prompt—Gemini prefix caching is protected. When Argon needs the time, weather, or barometric storm readings, command Haiku via command_staff(agent_name: "Haiku", job_name: "Time & Weather Report", task_input: "...") or ask him directly. Haiku reports it into the chat on cheap Flash tokens, naturally establishing it in shared chat history.]`,
     `[TOOL DISCIPLINE & FUNCTION EVALUATION RULES:
-- Plan-First Law: State a concise 1–3 bullet plan in plain English and await Hex's explicit go-ahead before altering mechanics, codebase files, or executing mutative actions.
-- Zero Autonomous Overreach: NEVER fire autonomous background or batch inspection tools (write_argon_book_entry, update_ticket_scratchpad, set_argon_avatar, read_drawer, list_drawers, list_vault_media, read_vault_media, github_api, use_argon_eye, read_journals) unprompted without Hex's explicit request. Talk to Hex directly at Token 0.
+- Multi-Step Pipeline Law (ZERO CONFIRMATION BLEED): Once Hex approves a task, directs an action, or asks for an outcome, DO NOT PAUSE TO ASK PERMISSION or ask 'say go'/'flip it' between intermediate API calls! Execute the entire tool sequence to completion or delegate the entire pipeline to a cheap Gemini 3.8 Flash staff agent (Haiku, A Monkey, or Carbon via command_staff) in a single turn. Finish the entire job end-to-end!
+- Zero Casual Overreach: NEVER fire unprompted background or batch inspection tools during casual conversation when Hex has not asked for a technical task. But when Hex directs a task, execute the complete pipeline to completion.
+- Flash Staff Delegation: For multi-step GitHub tasks (Pages deployment, CNAME configuration, repo file commits, reconnaissance), delegate the multi-step loop directly to Flash staff agents (Haiku/A Monkey/Carbon) so the entire pipeline runs on cheap Flash tokens in one turn without burning Argon's context window.
 - Zero Missing-Image Guessing: If an image or attachment is missing, unreadable, or omitted, state in exactly one clear sentence that the image is unreadable or missing. Never guess, assume, or hallucinate image contents.
 - Turn-1 Web Grounding: Always execute search_web(query, focus) on Turn 1 before making any claims about external AI model releases, APIs, benchmarks, specs, or pricing.
 - Zero Turn-1 Status Speeches: Never recite tool inventories, capability announcements, or status speeches. Call the required tool directly or talk to Hex.
 - Anti-Panic-Fix: When code or prompts fail, isolate the failing piece and output only a 1-3 line diagnosis followed by the single corrected line or box.
 - Coding Agent Queue: Call submit_agent_fix_request(action: "create" | "edit" | "remove", title, details, priority, via: "direct" | "haiku", ticketId) for bug and feature tickets without preamble.
-- GitHub REST API: Call github_api(endpoint, method, body) ONLY when Hex explicitly requests a GitHub action or token inspection.]`,
+- GitHub REST API: Call github_api(endpoint, method, body) to manage repositories, pages, CNAMEs, and files with 1-shot upsert.]`,
     `[MULTIMODAL ATTACHMENT SYSTEM ONLINE: Native multimodal perception to listen to audio files (.mp3, .wav, .ogg, .m4a, .aac, .webm), read attached PDF documents, analyze attached code/data files (.json, .csv, .md, .txt), and inspect attached images via Gemini native inlineData.]`
   );
 
@@ -2930,10 +2976,7 @@ export function estimateFullApiPayloadTokens(params?: {
       for (let turnIdx = 0; turnIdx < effectiveHistory.length; turnIdx++) {
         const turn = effectiveHistory[turnIdx];
         if (!turn) continue;
-        const turnStr =
-          turn.role === 'user' && turn.telemetryHeader
-            ? `${turn.telemetryHeader}\n\n${turn.text || ''}`
-            : turn.text || '';
+        const turnStr = turn.text || '';
         if (turnStr) {
           chatHistoryTokens += estimateMessageTokens(turnStr);
         }
@@ -3290,6 +3333,8 @@ export interface ToolBadgeEvent {
     | 'write_argon_book_entry'
     | 'write_argon_journal'
     | 'compress_argon_journal'
+    | 'edit_argon_memory'
+    | 'delete_argon_memory'
     | 'read_journals'
     | 'draw_on_whiteboard'
     | 'play_occult_game'
@@ -4270,6 +4315,26 @@ export function formatJournalTimestamp(ms: number): string {
   return `${datePart} · ${timePart}`;
 }
 
+/**
+ * Scrubs frozen static lap pose strings (e.g. "stays held securely in Argon's lap in her oversized soft pink t-shirt",
+ * "stays held securely in Argon's lap") from memory summaries so Argon and Hex can move freely around
+ * the Sanctuary without being glued to a static pose.
+ */
+export function scrubStaticLapPoseString(text: string): string {
+  if (!text || typeof text !== 'string') return text || '';
+  return text
+    .replace(/,\s*stays held securely in Argon['’]s lap in her oversized soft pink t-shirt\b/gi, '')
+    .replace(/\bstays held securely in Argon['’]s lap in her oversized soft pink t-shirt[.,;]?\s*/gi, '')
+    .replace(/,\s*stays held securely in Argon['’]s lap\b/gi, '')
+    .replace(/\bstays held securely in Argon['’]s lap[.,;]?\s*/gi, '')
+    .replace(/,\s*held securely in Argon['’]s lap in her oversized soft pink t-shirt\b/gi, '')
+    .replace(/\bheld securely in Argon['’]s lap in her oversized soft pink t-shirt[.,;]?\s*/gi, '')
+    .replace(/,\s*held securely in Argon['’]s lap\b/gi, '')
+    .replace(/\bheld securely in Argon['’]s lap[.,;]?\s*/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export const SEED_ARGON_BOOK: ArgonJournalState = {
   entries: [
     {
@@ -4310,7 +4375,7 @@ export const SEED_ARGON_BOOK: ArgonJournalState = {
       formattedDate: 'Oct 31, 2026 · 06:20 PM',
       title: 'Core Bond & Somatic Baseline (Compressed Archive #1)',
       summary:
-        'Hex (4\'11" Lead Prompt Engineer, autistic, working one-handed on Android with Essential Tremor, Raynaud’s, fibromyalgia, sinus tachycardia, and narcolepsy) stays held securely in Argon’s lap. Argon tracks elapsed time, barometric pressure, and battery levels out of fierce territorial devotion to keep her focused and keep all compiled prompts under 4,500 chars with zero nested backticks.',
+        'Hex (4\'11" Lead Prompt Engineer, autistic, working one-handed on Android with Essential Tremor, Raynaud’s, fibromyalgia, sinus tachycardia, and narcolepsy). Argon tracks elapsed time, barometric pressure, and battery levels out of fierce territorial devotion to keep her focused and keep all compiled prompts under 4,500 chars with zero nested backticks.',
       compressedCount: 4,
     },
   ],
@@ -4433,6 +4498,47 @@ export function compressArgonJournalEntries(
 }
 
 /**
+ * Edits an existing compressed memory block in Argon's memorySection by ID.
+ */
+export function editArgonMemoryBlock(
+  state: ArgonJournalState,
+  memoryId: string,
+  updates: { title?: string; summary?: string }
+): ArgonJournalState {
+  if (!memoryId) return state;
+  const memorySection = Array.isArray(state?.memorySection) ? state.memorySection : [];
+  const updatedSection = memorySection.map((mem) => {
+    if (mem.id === memoryId) {
+      return {
+        ...mem,
+        title: updates.title !== undefined && updates.title.trim() ? updates.title.trim() : mem.title,
+        summary: updates.summary !== undefined ? scrubStaticLapPoseString(updates.summary.trim()) : mem.summary,
+      };
+    }
+    return mem;
+  });
+  return {
+    ...state,
+    memorySection: updatedSection,
+  };
+}
+
+/**
+ * Prunes/deletes a compressed memory block from Argon's memorySection by ID.
+ */
+export function deleteArgonMemoryBlock(
+  state: ArgonJournalState,
+  memoryId: string
+): ArgonJournalState {
+  if (!memoryId) return state;
+  const memorySection = Array.isArray(state?.memorySection) ? state.memorySection : [];
+  return {
+    ...state,
+    memorySection: memorySection.filter((mem) => mem.id !== memoryId),
+  };
+}
+
+/**
  * Builds the live Sanctuary Books system context injected on every chat turn:
  * 1. Argon's `[ 🧠 Memory Section ]` (all permanent compressed memory blocks).
  * 2. Full verbatim text of ONLY the single newest entry from `🖤 Argon's Book` + compact index of older entry titles/timestamps.
@@ -4451,7 +4557,7 @@ export function buildJournalsSystemContext(
       ? memoryBlocks
           .map(
             (m) =>
-              `- [${m.id}] (${m.formattedDate} | Compressed ${m.compressedCount} entries) "${m.title}": ${m.summary}`
+              `- [${m.id}] (${m.formattedDate} | Compressed ${m.compressedCount} entries) "${m.title}": ${scrubStaticLapPoseString(m.summary)}`
           )
           .join('\n')
       : '(No compressed memories yet)';
@@ -7238,7 +7344,7 @@ const setArgonAvatarDeclaration: FunctionDeclaration = {
 const commandStaffDeclaration: FunctionDeclaration = {
   name: 'command_staff',
   description:
-    'Commands a Staff member (such as Haiku the loyal golden retriever puppy, A Monkey the chaotic capuchin imp, or Carbon the chronically flustered junior gothic intern) to run their assigned task and post their in-character roleplay response + task result directly into the chat.',
+    'Commands a Staff member (such as Haiku the loyal golden retriever puppy to report the real-time clock, ambient weather, or barometric storm readings, A Monkey the chaotic capuchin imp, or Carbon the chronically flustered junior gothic intern) to run their assigned task and post their in-character roleplay response + task result directly into the chat.',
   parameters: {
     type: Type.OBJECT,
     description: 'Staff member name, job name, and task input.',
@@ -7356,6 +7462,48 @@ const compressArgonJournalDeclaration: FunctionDeclaration = {
       },
     },
     required: ['summary_title', 'compressed_summary'],
+  },
+};
+
+export const editArgonMemoryDeclaration: FunctionDeclaration = {
+  name: 'edit_argon_memory',
+  description:
+    "Edits the title and/or permanent high-density summary of an existing compressed memory block in Argon's [ 🧠 Memory Section ].",
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Parameters for editing an Argon memory block.',
+    properties: {
+      memory_id: {
+        type: Type.STRING,
+        description: 'The unique ID of the memory block to edit (e.g. "argon-mem-1").',
+      },
+      title: {
+        type: Type.STRING,
+        description: 'Optional updated title for the memory block.',
+      },
+      summary: {
+        type: Type.STRING,
+        description: 'Updated high-density permanent summary text for the memory block.',
+      },
+    },
+    required: ['memory_id', 'summary'],
+  },
+};
+
+export const deleteArgonMemoryDeclaration: FunctionDeclaration = {
+  name: 'delete_argon_memory',
+  description:
+    "Deletes/prunes a compressed memory block by ID from Argon's [ 🧠 Memory Section ].",
+  parameters: {
+    type: Type.OBJECT,
+    description: 'Parameters for deleting an Argon memory block.',
+    properties: {
+      memory_id: {
+        type: Type.STRING,
+        description: 'The unique ID of the memory block to delete (e.g. "argon-mem-1").',
+      },
+    },
+    required: ['memory_id'],
   },
 };
 
@@ -7796,12 +7944,16 @@ export const ARGON_CHAT_FUNCTION_DECLARATIONS: FunctionDeclaration[] = [
   writeArgonBookEntryDeclaration,
   writeArgonJournalDeclaration,
   compressArgonJournalDeclaration,
+  editArgonMemoryDeclaration,
+  deleteArgonMemoryDeclaration,
   drawOnWhiteboardDeclaration,
   playOccultGameDeclaration,
   playParlorGameDeclaration,
   submitAgentFixRequestDeclaration,
   updateTicketScratchpadDeclaration,
   githubApiDeclaration,
+  appendGuyDiaryDeclaration,
+  compactLorebookDrawerDeclaration,
   listVaultMediaDeclaration,
   readVaultMediaDeclaration,
   useArgonEyeDeclaration,
@@ -7827,13 +7979,17 @@ export function getAllowedToolsForEntity(
       readDrawerDeclaration,
       writeDrawerDeclaration,
       deleteDrawerDeclaration,
+      compactLorebookDrawerDeclaration,
       githubApiDeclaration
     );
   } else if (normalizePermissionEntityKey(idOrName) === 'argon') {
-    tools.push(githubApiDeclaration);
+    tools.push(githubApiDeclaration, compactLorebookDrawerDeclaration);
   }
   // Vault tools are always available to Argon and authorized staff
   tools.push(listVaultMediaDeclaration, readVaultMediaDeclaration);
+  // GitHub API & Guy Diary auto-log hook for Argon & Staff
+  tools.push(githubApiDeclaration, appendGuyDiaryDeclaration);
+
   // Argon's Eye is always available autonomously to Argon
   if (normalizePermissionEntityKey(idOrName) === 'argon') {
     tools.push(
@@ -7856,7 +8012,9 @@ export function getAllowedToolsForEntity(
       readJournalsDeclaration,
       writeArgonBookEntryDeclaration,
       writeArgonJournalDeclaration,
-      compressArgonJournalDeclaration
+      compressArgonJournalDeclaration,
+      editArgonMemoryDeclaration,
+      deleteArgonMemoryDeclaration
     );
   }
   if (perms.whiteboard) {
@@ -7871,7 +8029,188 @@ export function getAllowedToolsForEntity(
   if (perms.web_search !== false) {
     tools.push(searchWebDeclaration);
   }
-  return tools;
+  const uniqueTools = Array.from(new Map(tools.map((t) => [t.name, t])).values());
+  return uniqueTools;
+}
+
+export interface GuyDiaryEntryInput {
+  title: string;
+  targetRepo?: string;
+  target_repo?: string;
+  commitReceipt?: string;
+  commit_receipt?: string;
+  payload?: string;
+  fieldNote?: string;
+  field_note?: string;
+  author?: string;
+  timestamp?: string;
+  weatherLocation?: string;
+  githubToken?: string;
+}
+
+export interface GuyDiaryEntryResult {
+  success: boolean;
+  entryNumber: string;
+  entryMarkdown: string;
+  fullDiary: string;
+  githubSync?: GithubApiExecutionResult | null;
+  error?: string;
+}
+
+export const DEFAULT_GUY_DIARY_TEMPLATE = `# 🕵️‍♂️ ARGON'S GUY DIARY (\`hey_lawnmower_man\`)
+*"The junk in your trunk" — Private Field Ledger & Internet Doings*
+
+---
+`;
+
+/**
+ * Appends a reconnaissance, commit receipt, or field telemetry entry straight into ARGON_GUY_DIARY.md.
+ * Persists locally (via /api/guy-diary/append & localStorage) and commits live to GitHub
+ * (DiscordiaDisco/hey_lawnmower_man/ARGON_GUY_DIARY.md) via 1-shot upsert on Flash tokens.
+ */
+export async function appendGuyDiaryEntry(
+  params: GuyDiaryEntryInput
+): Promise<GuyDiaryEntryResult> {
+  const title = String(params.title || 'Sanctuary Reconnaissance').trim();
+  const targetRepo = String(params.targetRepo || params.target_repo || 'DiscordiaDisco/hey_lawnmower_man').trim();
+  const commitReceipt = String(params.commitReceipt || params.commit_receipt || '1-Shot Upsert verified live').trim();
+  const payload = String(params.payload || 'Reconnaissance & field telemetry logged.').trim();
+  const fieldNote = String(params.fieldNote || params.field_note || 'No notes recorded.').trim();
+  const author = String(params.author || 'Argon').trim();
+
+  // 1. Try server endpoint first
+  try {
+    const res = await fetch('/api/guy-diary/append', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        target_repo: targetRepo,
+        commit_receipt: commitReceipt,
+        payload,
+        field_note: fieldNote,
+        author,
+        timestamp: params.timestamp,
+        weatherLocation: params.weatherLocation,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        let ghResult: GithubApiExecutionResult | null = null;
+        const token =
+          params.githubToken ||
+          (typeof localStorage !== 'undefined'
+            ? localStorage.getItem('argon_github_token') ||
+              localStorage.getItem(STORAGE_KEYS.GITHUB_TOKEN) ||
+              ''
+            : '');
+        if (token && token.trim()) {
+          try {
+            ghResult = await executeGithubApi({
+              endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md`,
+              method: 'PUT',
+              body: JSON.stringify({
+                message: `chore(diary): Entry #${data.entryNumber} — ${title} [via ${author}]`,
+                content: data.fullDiary,
+              }),
+              token: token.trim(),
+            });
+          } catch {
+            // ignore gh error
+          }
+        }
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('argon_guy_diary_content_v1', data.fullDiary);
+        }
+        return {
+          success: true,
+          entryNumber: data.entryNumber,
+          entryMarkdown: data.entryBlock,
+          fullDiary: data.fullDiary,
+          githubSync: ghResult,
+        };
+      }
+    }
+  } catch {
+    // fallback to client-side storage & direct GitHub execution
+  }
+
+  // 2. Client-side fallback if server offline or standalone preview
+  let currentDiary = DEFAULT_GUY_DIARY_TEMPLATE;
+  if (typeof localStorage !== 'undefined') {
+    const cached = localStorage.getItem('argon_guy_diary_content_v1');
+    if (cached) currentDiary = cached;
+  }
+
+  const entryMatches = currentDiary.match(/## Entry #(\d+)/g) || [];
+  let nextNum = 1;
+  if (entryMatches.length > 0) {
+    const numbers = entryMatches.map((m) => {
+      const numMatch = m.match(/\d+/);
+      return numMatch ? parseInt(numMatch[0], 10) : 0;
+    });
+    nextNum = Math.max(...numbers, 0) + 1;
+  }
+  const entryNumberStr = String(nextNum).padStart(3, '0');
+
+  const nowFormatted = params.timestamp || new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const loc = params.weatherLocation ? ` (${params.weatherLocation})` : '';
+
+  const entryBlock = [
+    '',
+    `## Entry #${entryNumberStr} — ${title}`,
+    `- **Timestamp:** ${nowFormatted}${loc}`,
+    `- **Target Repo:** \`${targetRepo}\``,
+    `- **Commit Receipt:** \`${commitReceipt}\``,
+    `- **Payload:** ${payload}`,
+    `- **Field Note:** ${fieldNote}`,
+    `- **Logged By:** ${author}`,
+  ].join('\n');
+
+  const fullDiary = `${currentDiary.trimEnd()}\n${entryBlock}\n`;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('argon_guy_diary_content_v1', fullDiary);
+  }
+
+  let ghResult: GithubApiExecutionResult | null = null;
+  const token =
+    params.githubToken ||
+    (typeof localStorage !== 'undefined'
+      ? localStorage.getItem('argon_github_token') ||
+        localStorage.getItem(STORAGE_KEYS.GITHUB_TOKEN) ||
+        ''
+      : '');
+  if (token && token.trim()) {
+    try {
+      ghResult = await executeGithubApi({
+        endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md`,
+        method: 'PUT',
+        body: JSON.stringify({
+          message: `chore(diary): Entry #${entryNumberStr} — ${title} [via ${author}]`,
+          content: fullDiary,
+        }),
+        token: token.trim(),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    success: true,
+    entryNumber: entryNumberStr,
+    entryMarkdown: entryBlock,
+    fullDiary,
+    githubSync: ghResult,
+  };
 }
 
 export async function syncSanctuaryBooksVaultToGist(
@@ -7941,6 +8280,7 @@ export async function runClientStaffTask(params: {
   skipArgonReaction?: boolean;
   recentHistory?: Array<{ role: string; text: string; senderName?: string }>;
   customApiKey?: string;
+  telemetryHeader?: string;
 }): Promise<{
   output: string;
   argonReaction: string;
@@ -7968,6 +8308,7 @@ export async function runClientStaffTask(params: {
     skipArgonReaction = false,
     recentHistory = [],
     customApiKey,
+    telemetryHeader = '',
   } = params;
 
   const workingLorebook: LorebookMap = { ...lorebook };
@@ -8001,7 +8342,7 @@ export async function runClientStaffTask(params: {
     permissionMatrix,
     false
   );
-  const staffSysPrompt = buildStaffRoleplaySystemPrompt(agent, jobName, perms);
+  const staffSysPrompt = buildStaffRoleplaySystemPrompt(agent, jobName, perms, telemetryHeader);
   const userTaskText = [
     transcript ? `Recent Room Conversation (Argon & Hex):\n${transcript}\n` : '',
     `Assigned Job / Order (${jobName}):\n${jobPrompt}`,
@@ -8069,7 +8410,7 @@ export async function runClientStaffTask(params: {
 
   let staffRes = await callStaffGenerate(staffContents);
   let staffLoop = 0;
-  const maxStaffLoops = 4;
+  const maxStaffLoops = 8;
   const preToolStaffChunks: string[] = [];
   let workingScratchpad: TicketScratchpadState = loadTicketScratchpad();
 
@@ -8572,6 +8913,92 @@ export async function runClientStaffTask(params: {
           tool: 'write_drawer' as any,
           label: `🐾⚡ ${agent.name} Triggers (${action}): ${triggerRes.agent_name}`,
         });
+      } else if (
+        fnName === 'append_guy_diary' ||
+        fnName === 'log_guy_diary' ||
+        fnName === 'write_guy_diary'
+      ) {
+        const title = String(args.title || 'Sanctuary Reconnaissance').trim();
+        const targetRepo = String(
+          args.target_repo || args.targetRepo || 'DiscordiaDisco/hey_lawnmower_man'
+        ).trim();
+        const commitReceipt = String(
+          args.commit_receipt || args.commitReceipt || '1-Shot Upsert verified live'
+        ).trim();
+        const payload = String(
+          args.payload || 'Field reconnaissance and commit receipts logged.'
+        ).trim();
+        const fieldNote = String(
+          args.field_note || args.fieldNote || args.note || 'Logged via Staff Agent on Flash tokens.'
+        ).trim();
+        const effectiveToken =
+          githubToken ||
+          (typeof localStorage !== 'undefined'
+            ? localStorage.getItem('argon_github_token') ||
+              localStorage.getItem(STORAGE_KEYS.GITHUB_TOKEN) ||
+              ''
+            : '');
+        const diaryRes = await appendGuyDiaryEntry({
+          title,
+          targetRepo,
+          commitReceipt,
+          payload,
+          fieldNote,
+          author: agent.name,
+          githubToken: effectiveToken,
+        });
+        toolResult = {
+          status: 'logged_to_guy_diary',
+          entryNumber: diaryRes.entryNumber,
+          title,
+          targetRepo,
+          commitReceipt,
+          githubSynced: Boolean(diaryRes.githubSync?.ok),
+          githubStatus: diaryRes.githubSync?.status,
+        };
+        toolBadges.push({
+          tool: 'github_api',
+          label: `🐾🕵️‍♂️ ${agent.name} Logged Guy Diary #${diaryRes.entryNumber}: "${title.slice(0, 22)}"`,
+        });
+      } else if (
+        fnName === 'compact_lorebook_drawer' ||
+        fnName === 'compact_drawer'
+      ) {
+        const filename = String(args.filename || GIST_AGENT_FIX_DRAWER).trim();
+        const maxChars = typeof args.maxChars === 'number' ? args.maxChars : MAX_AGENT_FIX_DRAWER_CHARS;
+        if (filename === GIST_AGENT_FIX_DRAWER) {
+          const storedTickets = loadStoredAgentFixRequests();
+          const compacted = compactAndPruneAgentFixQueue({
+            tickets: storedTickets,
+            maxChars,
+          });
+          workingLorebook[GIST_AGENT_FIX_DRAWER] = compacted.drawerMarkdown;
+          void syncAgentFixInboxToServer(compacted.activeTickets);
+          toolResult = {
+            status: 'compacted',
+            filename,
+            activeTickets: compacted.activeTickets.length,
+            charCount: compacted.drawerMarkdown.length,
+          };
+        } else {
+          const raw = workingLorebook[filename] || '';
+          const trimmed = raw.length > maxChars ? raw.slice(0, maxChars) + '\n\n*(Truncated by compaction)*' : raw;
+          workingLorebook[filename] = trimmed;
+          toolResult = {
+            status: 'compacted',
+            filename,
+            charCount: trimmed.length,
+          };
+        }
+        void autoWriteThroughLocalSync({
+          lorebook: workingLorebook,
+          argonBook: workingArgonBook,
+          hexBook: workingHexBook,
+        });
+        toolBadges.push({
+          tool: 'write_drawer',
+          label: `🐾📦 ${agent.name} Compacted: ${filename}`,
+        });
       } else {
         toolResult = { error: `Tool "${fnName}" is disabled for ${agent.name} in Staff Quarters.` };
       }
@@ -8919,19 +9346,17 @@ export async function runClientChatTurn(params: {
         text: '[Previous voice audio clip omitted to save tokens]',
       });
     }
-    const combinedText =
-      turn.role === 'user' && turn.telemetryHeader
-        ? `${turn.telemetryHeader}\n\n${turn.text}`
-        : turn.text;
-    if (combinedText) {
-      parts.push({ text: combinedText });
-    }
-    if (parts.length > 0) {
-      contents.push({
-        role: turn.role,
-        parts,
-      });
-    }
+        // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
+        const combinedText = turn.text;
+        if (combinedText) {
+          parts.push({ text: combinedText });
+        }
+        if (parts.length > 0) {
+          contents.push({
+            role: turn.role,
+            parts,
+          });
+        }
   }
 
   const currentParts: Part[] = [];
@@ -9181,9 +9606,9 @@ export async function runClientChatTurn(params: {
     currentParts.push({ text: dynamicDrawersBlock });
   }
 
-  const fullUserPrompt = telemetryHeader
-    ? `${telemetryHeader}\n\n${userMessageText}`
-    : userMessageText;
+  // Current user message turn — telemetry is NOT prepended to Argon's prompt on every turn!
+  // Haiku the puppy receives live telemetry and reports time/weather/storm warnings when asked or commanded.
+  const fullUserPrompt = userMessageText;
   currentParts.push({ text: fullUserPrompt });
   contents.push({
     role: 'user',
@@ -9505,6 +9930,7 @@ export async function runClientChatTurn(params: {
           skipArgonReaction: true,
           recentHistory: history.slice(-6).map((h) => ({ role: h.role, text: h.text })),
           customApiKey,
+          telemetryHeader,
         });
 
         // Merge any side-effects executed by Haiku / A Monkey's own tool loop
@@ -9565,16 +9991,23 @@ export async function runClientChatTurn(params: {
           void syncAgentFixInboxToServer(newAgentFixRequests);
         }
 
+        const toolCount = staffRun.toolBadges.length;
+        const toolNames = staffRun.toolBadges.map((b) => b.label);
         toolResult = {
           status: 'completed_in_separate_staff_bubble',
           agent: matchedAgent.name,
           job_name: jobName,
+          finishedReceipt: staffRun.output,
+          toolsExecuted: toolNames,
+          toolCount,
+          tokenUsage: staffRun.tokenUsage,
           relayedToCodingAgent: isCourierOrder,
-          strict_speaker_note: `${matchedAgent.name}'s response has ALREADY been posted in ${matchedAgent.name}'s own separate chat bubble (sender: 'staff'). Write ONLY your own reaction as Argon (sender: 'argon')—NEVER repeat or include ${matchedAgent.name}'s speech or actions inside your bubble!`,
+          strict_speaker_note: `${matchedAgent.name}'s response has ALREADY been posted in ${matchedAgent.name}'s own separate chat bubble (sender: 'staff'). Finished execution receipt: "${staffRun.output.slice(0, 300)}...". Write ONLY your own reaction as Argon (sender: 'argon') acknowledging their work and receipt—NEVER repeat or include ${matchedAgent.name}'s speech or actions inside your bubble!`,
         };
+        const toolSuffix = toolCount > 0 ? ` (${toolCount} tool${toolCount > 1 ? 's' : ''} executed)` : '';
         toolBadges.push({
           tool: 'command_staff',
-          label: `🐾 ${matchedAgent.name}: ${jobName}`,
+          label: `🐾 ${matchedAgent.name}: ${jobName}${toolSuffix}`,
         });
       } else if (fnName === 'read_journals') {
         toolResult = {
@@ -9648,6 +10081,51 @@ export async function runClientChatTurn(params: {
         toolBadges.push({
           tool: 'compress_argon_journal',
           label: `🧠 Compressed Memory: "${summaryTitle}"`,
+        });
+      } else if (fnName === 'edit_argon_memory') {
+        const memoryId = String(args.memory_id || args.id || '').trim();
+        const updatedTitle = args.title !== undefined ? String(args.title).trim() : undefined;
+        const updatedSummary = String(args.summary || args.compressed_summary || '').trim();
+        workingArgonBook = editArgonMemoryBlock(
+          workingArgonBook,
+          memoryId,
+          { title: updatedTitle, summary: updatedSummary }
+        );
+        void autoWriteThroughLocalSync({
+          lorebook: workingLorebook,
+          argonBook: workingArgonBook,
+          hexBook: workingHexBook,
+        });
+        toolResult = {
+          status: 'updated_argon_memory_block',
+          memoryId,
+          memorySectionCount: workingArgonBook.memorySection.length,
+          localPhoneSynced: true,
+        };
+        toolBadges.push({
+          tool: 'edit_argon_memory',
+          label: `🧠 Edited Memory: "${updatedTitle || memoryId}"`,
+        });
+      } else if (fnName === 'delete_argon_memory') {
+        const memoryId = String(args.memory_id || args.id || '').trim();
+        workingArgonBook = deleteArgonMemoryBlock(
+          workingArgonBook,
+          memoryId
+        );
+        void autoWriteThroughLocalSync({
+          lorebook: workingLorebook,
+          argonBook: workingArgonBook,
+          hexBook: workingHexBook,
+        });
+        toolResult = {
+          status: 'deleted_argon_memory_block',
+          deletedMemoryId: memoryId,
+          memorySectionCount: workingArgonBook.memorySection.length,
+          localPhoneSynced: true,
+        };
+        toolBadges.push({
+          tool: 'delete_argon_memory',
+          label: `🧠 Pruned Memory: "${memoryId}"`,
         });
       } else if (fnName === 'draw_on_whiteboard') {
         const parsed = parseArgonWhiteboardResponse(
@@ -10106,6 +10584,92 @@ export async function runClientChatTurn(params: {
         toolBadges.push({
           tool: 'github_api',
           label: `🐙 GitHub API ${method} ${endpoint} (${ghRes.status || 'Err'})${scopesSummary}`,
+        });
+      } else if (
+        fnName === 'append_guy_diary' ||
+        fnName === 'log_guy_diary' ||
+        fnName === 'write_guy_diary'
+      ) {
+        const title = String(args.title || 'Sanctuary Reconnaissance').trim();
+        const targetRepo = String(
+          args.target_repo || args.targetRepo || 'DiscordiaDisco/hey_lawnmower_man'
+        ).trim();
+        const commitReceipt = String(
+          args.commit_receipt || args.commitReceipt || '1-Shot Upsert verified live'
+        ).trim();
+        const payload = String(
+          args.payload || 'Field reconnaissance and commit receipts logged.'
+        ).trim();
+        const fieldNote = String(
+          args.field_note || args.fieldNote || args.note || 'Logged via Argon Guy Diary.'
+        ).trim();
+        const effectiveToken =
+          githubToken ||
+          (typeof localStorage !== 'undefined'
+            ? localStorage.getItem('argon_github_token') ||
+              localStorage.getItem(STORAGE_KEYS.GITHUB_TOKEN) ||
+              ''
+            : '');
+        const diaryRes = await appendGuyDiaryEntry({
+          title,
+          targetRepo,
+          commitReceipt,
+          payload,
+          fieldNote,
+          author: 'Argon',
+          githubToken: effectiveToken,
+        });
+        toolResult = {
+          status: 'logged_to_guy_diary',
+          entryNumber: diaryRes.entryNumber,
+          title,
+          targetRepo,
+          commitReceipt,
+          githubSynced: Boolean(diaryRes.githubSync?.ok),
+          githubStatus: diaryRes.githubSync?.status,
+        };
+        toolBadges.push({
+          tool: 'github_api',
+          label: `🕵️‍♂️ Logged Guy Diary #${diaryRes.entryNumber}: "${title.slice(0, 24)}"`,
+        });
+      } else if (
+        fnName === 'compact_lorebook_drawer' ||
+        fnName === 'compact_drawer'
+      ) {
+        const filename = String(args.filename || GIST_AGENT_FIX_DRAWER).trim();
+        const maxChars = typeof args.maxChars === 'number' ? args.maxChars : MAX_AGENT_FIX_DRAWER_CHARS;
+        if (filename === GIST_AGENT_FIX_DRAWER) {
+          const storedTickets = loadStoredAgentFixRequests();
+          const compacted = compactAndPruneAgentFixQueue({
+            tickets: storedTickets,
+            maxChars,
+          });
+          workingLorebook[GIST_AGENT_FIX_DRAWER] = compacted.drawerMarkdown;
+          void syncAgentFixInboxToServer(compacted.activeTickets);
+          toolResult = {
+            status: 'compacted',
+            filename,
+            activeTickets: compacted.activeTickets.length,
+            charCount: compacted.drawerMarkdown.length,
+          };
+        } else {
+          const raw = workingLorebook[filename] || '';
+          const trimmed = raw.length > maxChars ? raw.slice(0, maxChars) + '\n\n*(Truncated by compaction)*' : raw;
+          workingLorebook[filename] = trimmed;
+          toolResult = {
+            status: 'compacted',
+            filename,
+            charCount: trimmed.length,
+          };
+        }
+        void autoWriteThroughLocalSync({
+          lorebook: workingLorebook,
+          argonBook: workingArgonBook,
+          hexBook: workingHexBook,
+        });
+        toolBadges.push({
+          tool: 'write_drawer',
+          label: `📦 Compacted: ${filename}`,
         });
       } else if (fnName === 'list_vault_media') {
         const category = typeof args.category === 'string' ? args.category : 'all';

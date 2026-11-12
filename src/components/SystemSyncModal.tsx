@@ -1996,9 +1996,9 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
             <button
               type="button"
               onClick={() => setIsConfirmNewChatOpen(true)}
-              className="h-9 px-3.5 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer"
+              className="h-9 px-3.5 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer whitespace-nowrap"
             >
-              🧹 New Chat
+              🧹 Clear Chat &amp; Auto-Backup
             </button>
           </div>
         </section>
@@ -2378,28 +2378,28 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
       )}
       </main>
 
-      {/* "Are you sure?" Confirmation Popup for New Chat */}
+      {/* "Are you sure?" Confirmation Popup for Clear Chat & Auto-Backup */}
       {isConfirmNewChatOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
-          aria-label="Are you sure you want to start a new chat?"
+          aria-label="Auto-backup all state and clear chat?"
         >
           <div className="w-full max-w-xs rounded-2xl gilded-dock-frame p-5 text-center space-y-4">
             <h3 className="text-base font-serif font-bold text-[#f5ead8]">
-              Are you sure?
+              🧹 Clear Chat &amp; Auto-Backup
             </h3>
             <p className="text-xs font-mono text-[#cbb693]">
-              Start a new chat session and return to the chat interface?
+              Auto-backup all drawers (including 01_live_handoff.md), Sanctuary Books, Curios, and Tickets to storage &amp; Gist, then reset chat?
             </p>
             <div className="flex items-center justify-center gap-3 pt-1">
               <button
                 type="button"
                 onClick={() => setIsConfirmNewChatOpen(false)}
-                className="h-10 px-5 rounded-full gilded-pill-btn text-xs font-semibold cursor-pointer"
+                className="h-10 px-4 rounded-full gilded-pill-btn text-xs font-semibold cursor-pointer"
               >
-                No
+                Cancel
               </button>
               <button
                 type="button"
@@ -2407,9 +2407,9 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
                   setIsConfirmNewChatOpen(false);
                   onConfirmNewChatAndReturn();
                 }}
-                className="h-10 px-5 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer"
+                className="h-10 px-4 rounded-full gilded-send-btn text-xs font-semibold cursor-pointer whitespace-nowrap"
               >
-                Yes
+                Yes, Backup &amp; Clear
               </button>
             </div>
           </div>

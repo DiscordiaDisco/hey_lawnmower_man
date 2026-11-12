@@ -89,7 +89,23 @@ function renderInlineTokens(tokens: any[]): React.ReactNode {
             />
           );
         }
-        return <React.Fragment key={idx}>{tok.text}</React.Fragment>;
+      case 'link': {
+        const targetUrl = tok.url || tok.text;
+        return (
+          <a
+            key={idx}
+            href={targetUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+            className="text-[#E6A8B5] hover:text-[#ffe5a3] underline decoration-[#D4AF37]/60 hover:decoration-[#ffe5a3] font-medium break-all transition-colors cursor-pointer pointer-events-auto select-text"
+          >
+            {tok.text}
+          </a>
+        );
+      }
       case 'bold_italic':
         return (
           <strong key={idx} className="font-bold italic text-[#fff5e4]">
@@ -136,7 +152,7 @@ function renderFormattedText(text: string): React.ReactNode {
           return (
             <h2
               key={idx}
-              className="text-base sm:text-lg font-display-crest font-bold text-[#f2d59b] tracking-wide mt-2 mb-1 border-b border-[#c59b47]/30 pb-0.5"
+              className="text-base sm:text-lg font-display-crest font-bold text-[#f2d59b] tracking-wide mt-2 mb-1 border-b border-[#c59b47]/30 pb-0.5 select-text"
             >
               {renderInlineTokens(block.tokens)}
             </h2>
@@ -146,7 +162,7 @@ function renderFormattedText(text: string): React.ReactNode {
           return (
             <h3
               key={idx}
-              className="text-sm sm:text-base font-display-crest font-bold text-[#e6c88c] tracking-wide mt-2 mb-1"
+              className="text-sm sm:text-base font-display-crest font-bold text-[#e6c88c] tracking-wide mt-2 mb-1 select-text"
             >
               {renderInlineTokens(block.tokens)}
             </h3>
@@ -155,7 +171,7 @@ function renderFormattedText(text: string): React.ReactNode {
         return (
           <h4
             key={idx}
-            className="text-xs sm:text-sm font-display-crest font-semibold text-[#dfbc7c] tracking-wide mt-1.5 mb-0.5"
+            className="text-xs sm:text-sm font-display-crest font-semibold text-[#dfbc7c] tracking-wide mt-1.5 mb-0.5 select-text"
           >
             {renderInlineTokens(block.tokens)}
           </h4>
@@ -165,10 +181,10 @@ function renderFormattedText(text: string): React.ReactNode {
         return (
           <ul
             key={idx}
-            className="list-disc pl-5 space-y-1 my-1 text-[15px] sm:text-[16px] leading-snug sm:leading-relaxed"
+            className="list-disc pl-5 space-y-1 my-1 text-[15px] sm:text-[16px] leading-snug sm:leading-relaxed select-text"
           >
             {block.items.map((itemTokens, iIdx) => (
-              <li key={iIdx}>{renderInlineTokens(itemTokens)}</li>
+              <li key={iIdx} className="select-text">{renderInlineTokens(itemTokens)}</li>
             ))}
           </ul>
         );
@@ -176,10 +192,10 @@ function renderFormattedText(text: string): React.ReactNode {
         return (
           <ol
             key={idx}
-            className="list-decimal pl-5 space-y-1 my-1 text-[15px] sm:text-[16px] leading-snug sm:leading-relaxed"
+            className="list-decimal pl-5 space-y-1 my-1 text-[15px] sm:text-[16px] leading-snug sm:leading-relaxed select-text"
           >
             {block.items.map((itemTokens, iIdx) => (
-              <li key={iIdx}>{renderInlineTokens(itemTokens)}</li>
+              <li key={iIdx} className="select-text">{renderInlineTokens(itemTokens)}</li>
             ))}
           </ol>
         );
@@ -187,7 +203,7 @@ function renderFormattedText(text: string): React.ReactNode {
         return (
           <blockquote
             key={idx}
-            className="border-l-2 border-[#c59b47] pl-3 py-0.5 my-1.5 italic text-[#e6d5b8] bg-[#140e0c]/60 rounded-r"
+            className="border-l-2 border-[#c59b47] pl-3 py-0.5 my-1.5 italic text-[#e6d5b8] bg-[#140e0c]/60 rounded-r select-text"
           >
             {renderInlineTokens(block.tokens)}
           </blockquote>
@@ -197,7 +213,7 @@ function renderFormattedText(text: string): React.ReactNode {
         return (
           <p
             key={idx}
-            className="leading-snug sm:leading-relaxed mb-1 last:mb-0 text-[16px] sm:text-[17px]"
+            className="leading-snug sm:leading-relaxed mb-1 last:mb-0 text-[16px] sm:text-[17px] select-text"
           >
             {renderInlineTokens(block.tokens)}
           </p>
@@ -927,7 +943,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
               </div>
             </div>
           ) : (
-            <div className="font-serif-webtoon text-[#f5ead8] break-words">
+            <div className="font-serif-webtoon text-[#f5ead8] break-words select-text">
               {segments.map((seg, sIdx) =>
                 seg.type === 'code' ? (
                   <CodeCopyBlock key={sIdx} code={seg.content} language={seg.language} />
@@ -1194,7 +1210,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
           </div>
         )}
 
-        <div className="font-serif-webtoon text-[#f5ead8] break-words">
+        <div className="font-serif-webtoon text-[#f5ead8] break-words select-text">
           {segments.map((seg, sIdx) =>
             seg.type === 'code' ? (
               <CodeCopyBlock key={sIdx} code={seg.content} language={seg.language} />

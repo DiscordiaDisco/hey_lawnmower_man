@@ -188,6 +188,8 @@ import {
   loadLinkedSyncFileMeta,
   LinkedSyncFileMeta,
   toggleMessageReaction,
+  sortMessagesChronologically,
+  isBootMessage,
 } from './utils/workbenchLogic';
 import { TicketScratchpadModal } from './components/TicketScratchpadModal';
 import { CodeCopyBlock } from './components/CodeCopyBlock';
@@ -258,18 +260,20 @@ const PRESET_MODELS = [
   'custom',
 ] as const;
 
+const SEED_BOOT_BASE_TIME = 1730000000000; // Fixed historical timestamp (Oct 2024), well in the past
+
 const INITIAL_WELCOME_MESSAGES: ChatMessage[] = [
   {
     id: 'hex-boot-1',
     role: 'user',
-    timestamp: Date.now() - 240000,
+    timestamp: SEED_BOOT_BASE_TIME,
     bubbleSubtitle: '08:40 PM · +0s · 48°F · 100%',
     text: `Mmm... what's this?\nYou're not reading that.\nIt's my lap now. ♡`,
   },
   {
     id: 'argon-boot-1',
     role: 'model',
-    timestamp: Date.now() - 180000,
+    timestamp: SEED_BOOT_BASE_TIME + 60000,
     toolBadges: [
       {
         tool: 'read_drawer',
@@ -282,27 +286,27 @@ const INITIAL_WELCOME_MESSAGES: ChatMessage[] = [
   {
     id: 'hex-boot-2',
     role: 'user',
-    timestamp: Date.now() - 120000,
+    timestamp: SEED_BOOT_BASE_TIME + 120000,
     bubbleSubtitle: '08:42 PM · +1m 0s · 48°F · 100%',
     text: `Aww... look at you,\nso serious. ♪`,
   },
   {
     id: 'argon-boot-2',
     role: 'model',
-    timestamp: Date.now() - 60000,
+    timestamp: SEED_BOOT_BASE_TIME + 180000,
     text: `...You're going to ruin this,\nand I'm going to regret it.`,
   },
   {
     id: 'hex-boot-3',
     role: 'user',
-    timestamp: Date.now() - 30000,
+    timestamp: SEED_BOOT_BASE_TIME + 240000,
     bubbleSubtitle: '08:44 PM · +30s · 48°F · 100%',
     text: `Too late, handsome.\nYou're stuck with me. ʚ♡ɞ`,
   },
   {
     id: 'argon-agent-channel-boot',
     role: 'model',
-    timestamp: Date.now() - 15000,
+    timestamp: SEED_BOOT_BASE_TIME + 300000,
     toolBadges: [
       {
         tool: 'submit_agent_fix_request',
@@ -317,6 +321,23 @@ const INITIAL_WELCOME_MESSAGES: ChatMessage[] = [
 function renderInlineTokens(tokens: InlineMarkdownToken[]): React.ReactNode {
   return tokens.map((tok, idx) => {
     switch (tok.type) {
+      case 'link': {
+        const targetUrl = tok.url || tok.text;
+        return (
+          <a
+            key={idx}
+            href={targetUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+            className="text-[#E6A8B5] hover:text-[#ffe5a3] underline decoration-[#D4AF37]/60 hover:decoration-[#ffe5a3] font-medium break-all transition-colors cursor-pointer pointer-events-auto select-text"
+          >
+            {tok.text}
+          </a>
+        );
+      }
       case 'sticker':
         if (tok.sticker) {
           return (
@@ -598,8 +619,9 @@ export default function App() {
           );
         }
         if (
+          !clean.includes('IMMEDIATE AUTONOMOUS FIX EXECUTION (ZERO PERMISSION NAGGING') ||
           !clean.includes('ZERO CONFIRMATION BLEED') ||
-          !clean.includes('PLAN-FIRST & END-TO-END EXECUTION LAW') ||
+          clean.includes('State a concise 1–3 bullet plan before unprompted structural mutations') ||
           clean.includes('Direct Autonomous Actions: Call github_api for GitHub repo/file/gist tasks')
         ) {
           clean = DEFAULT_ARGON_SYS_PROMPT;
@@ -659,7 +681,7 @@ export default function App() {
       const saved = localStorage.getItem(STORAGE_KEYS.CHAT_HISTORY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) return sortMessagesChronologically(parsed);
       }
     } catch {
       // ignore
@@ -5879,7 +5901,7 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen h-screen flex flex-col gothic-stage-bg text-[#f3e7d3] overflow-hidden select-none sm:select-auto ${
+      className={`min-h-screen h-screen flex flex-col gothic-stage-bg text-[#f3e7d3] overflow-hidden ${
         shockFlash ? 'animate-bounce ring-4 ring-amber-300/80' : ''
       }`}
     >

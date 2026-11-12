@@ -186,6 +186,9 @@ import {
   resolveTriggeredLorebookDrawers,
   toggleMessageReaction,
   reactToMessageDeclaration,
+  isBootMessage,
+  sortMessagesChronologically,
+  tokenizeLinksAndStickersInText,
 } from './workbenchLogic';
 
 test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => {
@@ -2942,10 +2945,10 @@ test('Dog Demands: Cache-Safe Argon System Prompt, Live Telemetry to Haiku, Stor
   assert.ok(avatarContext.includes('command Haiku via command_staff'));
 });
 
-test('Zero Confirmation Bleed & Flash Pipeline Delegation Laws', () => {
-  // 1. Argon's System Prompt explicitly contains ZERO CONFIRMATION BLEED laws
-  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('PLAN-FIRST & END-TO-END EXECUTION LAW (ZERO CONFIRMATION BLEED)'));
-  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('once Hex approves a plan, gives an order, or asks for an outcome, DO NOT bleed confirmation turns!'));
+test('Zero Confirmation Bleed, No Permission Nagging & Flash Pipeline Delegation Laws', () => {
+  // 1. Argon's System Prompt explicitly contains ZERO CONFIRMATION BLEED & ZERO PERMISSION NAGGING laws
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('IMMEDIATE AUTONOMOUS FIX EXECUTION (ZERO PERMISSION NAGGING & ZERO CONFIRMATION BLEED)'));
+  assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('without asking "Want me to...", "Should I...", or waiting for go-ahead'));
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('NEVER stop to ask \'say go\', \'flip it\', \'reset it\', or request permission between intermediate API calls'));
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('FLASH STAFF PIPELINE DELEGATION'));
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('delegate the entire pipeline to a cheap Gemini 3.8 Flash staff agent'));
@@ -2962,11 +2965,66 @@ test('Zero Confirmation Bleed & Flash Pipeline Delegation Laws', () => {
   const foundEnsured = ensuredJobs.find((j) => j.id === 'job-github-pages-deploy');
   assert.ok(foundEnsured);
 
-  // 4. buildHiddenAvatarAndStaffContext enforces zero confirmation bleed in tool discipline
+  // 4. buildHiddenAvatarAndStaffContext enforces zero confirmation bleed & immediate autonomous execution in tool discipline
   const ctx = buildHiddenAvatarAndStaffContext({ argonAvatarMode: 'default' });
   assert.ok(ctx.includes('ZERO CONFIRMATION BLEED'));
+  assert.ok(ctx.includes('ZERO PERMISSION NAGGING'));
   assert.ok(ctx.includes('DO NOT PAUSE TO ASK PERMISSION'));
-  assert.ok(ctx.includes('Execute the entire tool sequence to completion'));
+  assert.ok(ctx.includes('execute the entire tool sequence to completion'));
+});
+
+test('Clickable links in chat bubbles: Markdown links and raw URLs tokenized as link tokens', () => {
+  // 1. Markdown link syntax [text](url)
+  const mdLinkTokens = parseInlineMarkdown('Check this: [Lawnmower Man Repo](https://github.com/DiscordiaDisco/hey_lawnmower_man) for updates.');
+  const linkToken1 = mdLinkTokens.find((t) => t.type === 'link');
+  assert.ok(linkToken1);
+  assert.equal(linkToken1.text, 'Lawnmower Man Repo');
+  assert.equal(linkToken1.url, 'https://github.com/DiscordiaDisco/hey_lawnmower_man');
+
+  // 2. Raw URL syntax https://...
+  const rawUrlTokens = parseInlineMarkdown('Live link is https://discordiadisco.github.io/hey_lawnmower_man/ right now.');
+  const linkToken2 = rawUrlTokens.find((t) => t.type === 'link');
+  assert.ok(linkToken2);
+  assert.equal(linkToken2.text, 'https://discordiadisco.github.io/hey_lawnmower_man/');
+  assert.equal(linkToken2.url, 'https://discordiadisco.github.io/hey_lawnmower_man/');
+
+  // 3. Raw URL followed by sentence punctuation (. or ,) trims cleanly
+  const punctUrlTokens = parseInlineMarkdown('See https://example.com/api.');
+  const linkToken3 = punctUrlTokens.find((t) => t.type === 'link');
+  assert.ok(linkToken3);
+  assert.equal(linkToken3.url, 'https://example.com/api');
+
+  // 4. Combined with stickers and bold
+  const mixedTokens = parseInlineMarkdown('*I smirk* :demon: check [link](https://test.com) **now**!');
+  assert.ok(mixedTokens.some((t) => t.type === 'italic' && t.text === 'I smirk'));
+  assert.ok(mixedTokens.some((t) => t.type === 'sticker' && t.text === ':demon:'));
+  assert.ok(mixedTokens.some((t) => t.type === 'link' && t.url === 'https://test.com'));
+  assert.ok(mixedTokens.some((t) => t.type === 'bold' && t.text === 'now'));
+});
+
+test('Seed message timestamp sorting and chronological sorting', () => {
+  // 1. isBootMessage correctly flags boot/seed message IDs
+  assert.equal(isBootMessage('hex-boot-1'), true);
+  assert.equal(isBootMessage('argon-boot-2'), true);
+  assert.equal(isBootMessage('argon-agent-channel-boot'), true);
+  assert.equal(isBootMessage('some-random-boot-msg'), true);
+  assert.equal(isBootMessage('user-live-message-12345'), false);
+  assert.equal(isBootMessage('argon-live-67890'), false);
+  assert.equal(isBootMessage(undefined), false);
+
+  // 2. sortMessagesChronologically puts boot messages first, never pinned at bottom
+  const sampleMessages: any[] = [
+    { id: 'user-live-1', role: 'user', content: 'Live turn 1', timestamp: 1730000050000 },
+    { id: 'hex-boot-1', role: 'user', content: 'Greeting', timestamp: 1730000000000 },
+    { id: 'argon-live-1', role: 'assistant', content: 'Live reply 1', timestamp: 1730000060000 },
+    { id: 'argon-boot-1', role: 'assistant', content: 'Initial welcome', timestamp: 1730000005000 },
+  ];
+
+  const sorted = sortMessagesChronologically(sampleMessages);
+  assert.equal(sorted[0].id, 'hex-boot-1');
+  assert.equal(sorted[1].id, 'argon-boot-1');
+  assert.equal(sorted[2].id, 'user-live-1');
+  assert.equal(sorted[3].id, 'argon-live-1');
 });
 
 test('Auto-Backup state serializability and curio / scratchpad integrity', () => {

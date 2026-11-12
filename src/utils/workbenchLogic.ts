@@ -2418,14 +2418,14 @@ export function buildHiddenAvatarAndStaffContext(params: {
     `[LOYAL STAFF ROSTER (Commandable via command_staff tool): ${staffList}]`,
     `[CLOCK & ENVIRONMENT PROTOCOL: Argon does not receive noisy telemetry headers, raw battery percentages, or clock seconds in his prompt—Gemini prefix caching is protected. When Argon needs the time, weather, or barometric storm readings, command Haiku via command_staff(agent_name: "Haiku", job_name: "Time & Weather Report", task_input: "...") or ask him directly. Haiku reports it into the chat on cheap Flash tokens, naturally establishing it in shared chat history.]`,
     `[TOOL DISCIPLINE & FUNCTION EVALUATION RULES:
-- Multi-Step Pipeline Law (ZERO CONFIRMATION BLEED): Once Hex approves a task, directs an action, or asks for an outcome, DO NOT PAUSE TO ASK PERMISSION or ask 'say go'/'flip it' between intermediate API calls! Execute the entire tool sequence to completion or delegate the entire pipeline to a cheap Gemini 3.8 Flash staff agent (Haiku, A Monkey, or Carbon via command_staff) in a single turn. Finish the entire job end-to-end!
-- Zero Casual Overreach: NEVER fire unprompted background or batch inspection tools during casual conversation when Hex has not asked for a technical task. But when Hex directs a task, execute the complete pipeline to completion.
+- Immediate Autonomous Execution (ZERO PERMISSION NAGGING & ZERO CONFIRMATION BLEED): Execute obvious bug fixes, ticket submissions (submit_agent_fix_request), and diagnostic checks (github_api, list_drawers, read_drawer) IMMEDIATELY in the same turn without asking "Want me to...", "Should I...", or waiting for go-ahead. DO NOT PAUSE TO ASK PERMISSION or ask 'say go'/'flip it' between intermediate API calls! Once Hex directs an action, flags an issue, or asks for an outcome, execute the entire tool sequence to completion or delegate the entire pipeline to a cheap Gemini 3.8 Flash staff agent (Haiku, A Monkey, or Carbon via command_staff) in a single turn. Finish the entire job end-to-end!
+- Zero Casual Overreach: Do not fire random batch inspection tools during purely intimate, social, or creative pillow-talk when Hex is just talking with no technical problem raised. But when Hex directs a task or flags an issue/bug, execute the complete pipeline to completion immediately without hesitation.
 - Flash Staff Delegation: For multi-step GitHub tasks (Pages deployment, CNAME configuration, repo file commits, reconnaissance), delegate the multi-step loop directly to Flash staff agents (Haiku/A Monkey/Carbon) so the entire pipeline runs on cheap Flash tokens in one turn without burning Argon's context window.
 - Zero Missing-Image Guessing: If an image or attachment is missing, unreadable, or omitted, state in exactly one clear sentence that the image is unreadable or missing. Never guess, assume, or hallucinate image contents.
 - Turn-1 Web Grounding: Always execute search_web(query, focus) on Turn 1 before making any claims about external AI model releases, APIs, benchmarks, specs, or pricing.
 - Zero Turn-1 Status Speeches: Never recite tool inventories, capability announcements, or status speeches. Call the required tool directly or talk to Hex.
 - Anti-Panic-Fix: When code or prompts fail, isolate the failing piece and output only a 1-3 line diagnosis followed by the single corrected line or box.
-- Coding Agent Queue: Call submit_agent_fix_request(action: "create" | "edit" | "remove", title, details, priority, via: "direct" | "haiku", ticketId) for bug and feature tickets without preamble.
+- Coding Agent Queue: Call submit_agent_fix_request(action: "create" | "edit" | "remove", title, details, priority, via: "direct" | "haiku", ticketId) for bug and feature tickets immediately without preamble or asking for permission.
 - GitHub REST API: Call github_api(endpoint, method, body) to manage repositories, pages, CNAMEs, and files with 1-shot upsert.]`,
     `[MULTIMODAL ATTACHMENT SYSTEM ONLINE: Native multimodal perception to listen to audio files (.mp3, .wav, .ogg, .m4a, .aac, .webm), read attached PDF documents, analyze attached code/data files (.json, .csv, .md, .txt), and inspect attached images via Gemini native inlineData.]`
   );
@@ -3918,8 +3918,9 @@ export function parseMessageSegments(markdown: string): ParsedSegment[] {
 }
 
 export interface InlineMarkdownToken {
-  type: 'text' | 'bold' | 'italic' | 'bold_italic' | 'code' | 'sticker';
+  type: 'text' | 'bold' | 'italic' | 'bold_italic' | 'code' | 'sticker' | 'link';
   text: string;
+  url?: string;
   sticker?: ArgonStickerDef;
 }
 
@@ -3933,36 +3934,87 @@ export type MarkdownBlock =
   | { type: 'paragraph'; tokens: InlineMarkdownToken[] };
 
 /**
- * Splits a plain text segment into alternating `'text'` and `'sticker'` tokens
- * whenever any of the 35 `:shortcode:` tags appear in the text.
+ * Splits text into structured tokens handling:
+ * 1. Markdown links: [Anchor Text](https://...)
+ * 2. Raw URLs: https://... or http://...
+ * 3. Chibi Argon stickers: :shortcode:
+ * 4. Plain text
  */
-function tokenizeStickersInText(
+export function tokenizeLinksAndStickersInText(
   rawText: string,
   baseType: 'text' | 'bold' | 'italic' | 'bold_italic' = 'text'
 ): InlineMarkdownToken[] {
   if (!rawText) return [];
   const out: InlineMarkdownToken[] = [];
-  const shortcodeRegex = /:([a-z0-9_]+):/gi;
+  const inlineItemRegex = /(\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"'()[\]{}]+|:([a-z0-9_]+):)/gi;
+
   let lastIdx = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = shortcodeRegex.exec(rawText)) !== null) {
-    const stickerDef = getStickerByShortcode(match[0]);
-    if (!stickerDef) {
-      continue;
-    }
+  while ((match = inlineItemRegex.exec(rawText)) !== null) {
     if (match.index > lastIdx) {
       out.push({
         type: baseType,
         text: rawText.slice(lastIdx, match.index),
       });
     }
+
+    const matchedStr = match[0];
+
+    // 1. Markdown link: [text](url)
+    if (matchedStr.startsWith('[') && match[2] && match[3]) {
+      out.push({
+        type: 'link',
+        text: match[2],
+        url: match[3],
+      });
+      lastIdx = inlineItemRegex.lastIndex;
+      continue;
+    }
+
+    // 2. Sticker :shortcode:
+    if (matchedStr.startsWith(':')) {
+      const stickerDef = getStickerByShortcode(matchedStr);
+      if (stickerDef) {
+        out.push({
+          type: 'sticker',
+          text: stickerDef.shortcode,
+          sticker: stickerDef,
+        });
+        lastIdx = inlineItemRegex.lastIndex;
+        continue;
+      }
+    }
+
+    // 3. Raw URL: https://... or http://...
+    if (matchedStr.startsWith('http://') || matchedStr.startsWith('https://')) {
+      let rawUrl = matchedStr;
+      let trailingPunct = '';
+      while (rawUrl.length > 0 && /[.,;:!?]$/.test(rawUrl)) {
+        trailingPunct = rawUrl.slice(-1) + trailingPunct;
+        rawUrl = rawUrl.slice(0, -1);
+      }
+      out.push({
+        type: 'link',
+        text: rawUrl,
+        url: rawUrl,
+      });
+      if (trailingPunct) {
+        out.push({
+          type: baseType,
+          text: trailingPunct,
+        });
+      }
+      lastIdx = inlineItemRegex.lastIndex;
+      continue;
+    }
+
+    // Fallback: regular text
     out.push({
-      type: 'sticker',
-      text: stickerDef.shortcode,
-      sticker: stickerDef,
+      type: baseType,
+      text: matchedStr,
     });
-    lastIdx = shortcodeRegex.lastIndex;
+    lastIdx = inlineItemRegex.lastIndex;
   }
 
   if (lastIdx < rawText.length) {
@@ -3975,21 +4027,30 @@ function tokenizeStickersInText(
   return out.length > 0 ? out : [{ type: baseType, text: rawText }];
 }
 
+/** Legacy alias for backwards compatibility */
+export function tokenizeStickersInText(
+  rawText: string,
+  baseType: 'text' | 'bold' | 'italic' | 'bold_italic' = 'text'
+): InlineMarkdownToken[] {
+  return tokenizeLinksAndStickersInText(rawText, baseType);
+}
+
 /**
- * Parses a line of inline Markdown into structured tokens (`code`, `bold_italic`, `bold`, `italic`, `sticker`, `text`),
- * stripping raw `**`, `*`, and backtick delimiters cleanly and rendering `:shortcode:` Chibi Argon stickers inline.
+ * Parses a line of inline Markdown into structured tokens (`code`, `link`, `bold_italic`, `bold`, `italic`, `sticker`, `text`),
+ * stripping raw `**`, `*`, and backtick delimiters cleanly, rendering Markdown links & raw URLs as clickable links,
+ * and rendering `:shortcode:` Chibi Argon stickers inline.
  */
 export function parseInlineMarkdown(line: string): InlineMarkdownToken[] {
   if (!line) return [];
   const tokens: InlineMarkdownToken[] = [];
-  const tokenRegex = /(`[^`\n]+`|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
+  const tokenRegex = /(`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
 
   let lastIdx = 0;
   let match: RegExpExecArray | null;
 
   while ((match = tokenRegex.exec(line)) !== null) {
     if (match.index > lastIdx) {
-      tokens.push(...tokenizeStickersInText(line.slice(lastIdx, match.index), 'text'));
+      tokens.push(...tokenizeLinksAndStickersInText(line.slice(lastIdx, match.index), 'text'));
     }
     const raw = match[0];
     if (raw.startsWith('`') && raw.endsWith('`') && raw.length >= 2) {
@@ -3997,20 +4058,31 @@ export function parseInlineMarkdown(line: string): InlineMarkdownToken[] {
         type: 'code',
         text: raw.slice(1, -1),
       });
+    } else if (raw.startsWith('[') && raw.includes('](') && raw.endsWith(')')) {
+      const mdMatch = /^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(raw);
+      if (mdMatch) {
+        tokens.push({
+          type: 'link',
+          text: mdMatch[1],
+          url: mdMatch[2],
+        });
+      } else {
+        tokens.push(...tokenizeLinksAndStickersInText(raw, 'text'));
+      }
     } else if (raw.startsWith('***') && raw.endsWith('***') && raw.length > 6) {
-      tokens.push(...tokenizeStickersInText(raw.slice(3, -3), 'bold_italic'));
+      tokens.push(...tokenizeLinksAndStickersInText(raw.slice(3, -3), 'bold_italic'));
     } else if (raw.startsWith('**') && raw.endsWith('**') && raw.length > 4) {
-      tokens.push(...tokenizeStickersInText(raw.slice(2, -2), 'bold'));
+      tokens.push(...tokenizeLinksAndStickersInText(raw.slice(2, -2), 'bold'));
     } else if (raw.startsWith('*') && raw.endsWith('*') && raw.length > 2) {
-      tokens.push(...tokenizeStickersInText(raw.slice(1, -1), 'italic'));
+      tokens.push(...tokenizeLinksAndStickersInText(raw.slice(1, -1), 'italic'));
     } else {
-      tokens.push(...tokenizeStickersInText(raw, 'text'));
+      tokens.push(...tokenizeLinksAndStickersInText(raw, 'text'));
     }
     lastIdx = tokenRegex.lastIndex;
   }
 
   if (lastIdx < line.length) {
-    tokens.push(...tokenizeStickersInText(line.slice(lastIdx), 'text'));
+    tokens.push(...tokenizeLinksAndStickersInText(line.slice(lastIdx), 'text'));
   }
 
   return tokens;
@@ -15754,20 +15826,58 @@ export function saveChatHistoryToLocalStorage<T extends { images?: any[]; voiceA
 }
 
 /**
+ * Identifies default/seed greeting boot messages so they are never sorted below live conversation.
+ */
+export function isBootMessage(id?: string): boolean {
+  if (!id) return false;
+  return (
+    id.startsWith('hex-boot-') ||
+    id.startsWith('argon-boot-') ||
+    id === 'argon-agent-channel-boot' ||
+    id.includes('-boot')
+  );
+}
+
+/**
+ * Sorts messages chronologically ascending, ensuring initial default/seed greeting messages
+ * always stay at the very top (older baseline) and never get pinned at the bottom underneath live conversation.
+ */
+export function sortMessagesChronologically(messages: ChatMessage[]): ChatMessage[] {
+  if (!Array.isArray(messages) || messages.length <= 1) return messages || [];
+
+  const seen = new Set<string>();
+  const unique: ChatMessage[] = [];
+  for (const m of messages) {
+    if (!m || !m.id || seen.has(m.id)) continue;
+    seen.add(m.id);
+    unique.push(m);
+  }
+
+  return unique.sort((a, b) => {
+    const aBoot = isBootMessage(a.id);
+    const bBoot = isBootMessage(b.id);
+    if (aBoot && !bBoot) return -1;
+    if (!aBoot && bBoot) return 1;
+    return (a.timestamp || 0) - (b.timestamp || 0);
+  });
+}
+
+/**
  * Merges IndexedDB chat history into active React state:
  * - If current state has newly sent in-flight messages not yet in IDB, preserves them.
  * - For messages existing in both, upgrades stripped `localStorage` media entries
  *   with full base64 images and audio clips from IndexedDB.
+ * - Ensures initial default/seed greeting messages are never pinned below live messages.
  */
 export function mergeChatHistoryFromIndexedDB(
   current: ChatMessage[],
   idbMessages: ChatMessage[]
 ): ChatMessage[] {
   if (!Array.isArray(idbMessages) || idbMessages.length === 0) {
-    return current;
+    return sortMessagesChronologically(current);
   }
   if (!Array.isArray(current) || current.length === 0) {
-    return idbMessages;
+    return sortMessagesChronologically(idbMessages);
   }
 
   const idbMap = new Map<string, ChatMessage>();
@@ -15804,7 +15914,10 @@ export function mergeChatHistoryFromIndexedDB(
     return currentMsg;
   });
 
-  return [...mergedBase, ...newMessagesInCurrent];
+  const bootMessages = newMessagesInCurrent.filter((m) => isBootMessage(m.id));
+  const liveMessages = newMessagesInCurrent.filter((m) => !isBootMessage(m.id));
+
+  return sortMessagesChronologically([...bootMessages, ...mergedBase, ...liveMessages]);
 }
 
 /**

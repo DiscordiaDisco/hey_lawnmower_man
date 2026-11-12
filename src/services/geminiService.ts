@@ -6,7 +6,13 @@ import { GoogleGenAI, FunctionDeclaration, Type, Content, Part } from '@google/g
  */
 export function isGemini3Or4Model(model?: string): boolean {
   const m = (model || '').toLowerCase().trim();
-  return m.startsWith('gemini-4') || m.startsWith('gemini-3') || m.includes('argon');
+  return (
+    m.startsWith('gemini-4') ||
+    m.startsWith('gemini-3') ||
+    m.includes('argon') ||
+    m.includes('carbon') ||
+    m.includes('hydrogen')
+  );
 }
 
 /**

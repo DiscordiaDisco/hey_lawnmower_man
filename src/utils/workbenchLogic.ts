@@ -3740,6 +3740,8 @@ export function mapWmoWeatherCode(code: number | null | undefined): string {
 
 export const ALLOWED_PRESET_MODELS = [
   'gemini-4-argon',
+  'gemini-4-carbon',
+  'gemini-4-hydrogen',
   'gemini-3.1-pro-preview',
   'gemini-2.5-pro',
   'gemini-3.8-flash',
@@ -3747,14 +3749,24 @@ export const ALLOWED_PRESET_MODELS = [
 ] as const;
 
 /**
- * Normalizes a model ID while preserving 'gemini-4-argon', 'gemini-3.1-pro-preview', 'gemini-2.5-pro',
- * 'gemini-3.8-flash', and 'gemini-3.5-flash-lite'.
+ * Normalizes a model ID while preserving 'gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen',
+ * 'gemini-3.1-pro-preview', 'gemini-2.5-pro', 'gemini-3.8-flash', and 'gemini-3.5-flash-lite'.
  * Defaults to 'gemini-4-argon'.
  */
 export function normalizeModelId(modelId: string | null | undefined): string {
   const trimmed = (modelId || '').trim();
   if (!trimmed) {
     return 'gemini-4-argon';
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower === 'gemini 4 argon' || lower === 'gemini argon') {
+    return 'gemini-4-argon';
+  }
+  if (lower === 'gemini 4 carbon' || lower === 'gemini carbon') {
+    return 'gemini-4-carbon';
+  }
+  if (lower === 'gemini 4 hydrogen' || lower === 'gemini hydrogen') {
+    return 'gemini-4-hydrogen';
   }
   if (trimmed === 'gemini-2.5-flash') {
     return 'gemini-3.8-flash';
@@ -6250,6 +6262,22 @@ export const BRAIN_ENGINE_OPTIONS: BrainEngineOption[] = [
     description: 'Official Gemini 4 Argon sovereign brain with native thinkingLevel (low/medium/high), temperature-omitted reasoning, and full Sanctuary house tools.',
   },
   {
+    id: 'gemini-4-carbon',
+    label: 'gemini-4-carbon (Deep Reasoning Sovereign Brain)',
+    shortBadge: '🖤 gemini-4-carbon',
+    provider: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    description: 'Official Gemini 4 Carbon deep-reasoning sovereign brain with native thinkingLevel (low/medium/high), temperature-omitted reasoning, and full Sanctuary house tools.',
+  },
+  {
+    id: 'gemini-4-hydrogen',
+    label: 'gemini-4-hydrogen (Fast Gemini 4 Multimodal Flash)',
+    shortBadge: '⚡ gemini-4-hydrogen',
+    provider: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    description: 'Official Gemini 4 Hydrogen high-speed multimodal brain with native thinkingLevel, vision, audio, and full Sanctuary house tools.',
+  },
+  {
     id: 'gemini-3.1-pro-preview',
     label: 'gemini-3.1-pro-preview (Gemini 3.1 Pro Preview)',
     shortBadge: '✨ gemini-3.1-pro',
@@ -7192,12 +7220,16 @@ export async function generateContentWithAutoFallback(params: {
 
   const candidateModels = [
     'gemini-4-argon',
+    'gemini-4-carbon',
+    'gemini-4-hydrogen',
     'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
     'gemini-3.8-flash',
     'gemini-3.5-flash-lite',
   ];
   const explicitSpecialGemini =
+    requestedModel === 'gemini-4-carbon' ||
+    requestedModel === 'gemini-4-hydrogen' ||
     requestedModel === 'gemini-3.1-pro-preview' ||
     requestedModel === 'gemini-2.5-pro' ||
     requestedModel === 'gemini-3.8-pro' ||

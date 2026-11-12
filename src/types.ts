@@ -46,6 +46,8 @@ export type ThinkingLevel = 'low' | 'medium' | 'high';
 
 export type PresetBrainModel =
   | 'gemini-4-argon'
+  | 'gemini-4-carbon'
+  | 'gemini-4-hydrogen'
   | 'gemini-3.1-pro-preview'
   | 'gemini-2.5-pro'
   | 'gemini-3.8-flash'

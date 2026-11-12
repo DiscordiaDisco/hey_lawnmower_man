@@ -197,9 +197,11 @@ test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => 
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('=== WORKBENCH: [GLM -> DEEPSEEK -> CLAUDE] ==='));
 });
 
-test('normalizeModelId preserves real gemini-4-argon model ID directly and ALLOWED_PRESET_MODELS lists current flagship models', () => {
+test('normalizeModelId preserves real gemini-4-argon, gemini-4-carbon, and gemini-4-hydrogen model IDs and ALLOWED_PRESET_MODELS lists current flagship models', () => {
   assert.deepEqual(ALLOWED_PRESET_MODELS, [
     'gemini-4-argon',
+    'gemini-4-carbon',
+    'gemini-4-hydrogen',
     'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
     'gemini-3.8-flash',
@@ -207,6 +209,10 @@ test('normalizeModelId preserves real gemini-4-argon model ID directly and ALLOW
   ]);
   assert.equal(DEFAULT_STAFF_AGENTS[0].model, 'gemini-3.8-flash');
   assert.equal(normalizeModelId('gemini-4-argon'), 'gemini-4-argon');
+  assert.equal(normalizeModelId('gemini-4-carbon'), 'gemini-4-carbon');
+  assert.equal(normalizeModelId('gemini-4-hydrogen'), 'gemini-4-hydrogen');
+  assert.equal(normalizeModelId('gemini 4 carbon'), 'gemini-4-carbon');
+  assert.equal(normalizeModelId('gemini 4 hydrogen'), 'gemini-4-hydrogen');
   assert.equal(normalizeModelId(''), 'gemini-4-argon');
   assert.equal(normalizeModelId('gemini-3.1-pro-preview'), 'gemini-3.1-pro-preview');
   assert.equal(normalizeModelId('gemini-2.5-pro'), 'gemini-2.5-pro');
@@ -3049,6 +3055,45 @@ test('Auto-Backup state serializability and curio / scratchpad integrity', () =>
   const reloadedPad = loadTicketScratchpad();
   assert.equal(reloadedPad.title, pad.title);
   assert.equal(reloadedPad.items.length, pad.items.length);
+});
+
+test('gemini-4-carbon and gemini-4-hydrogen appear in BRAIN_ENGINE_OPTIONS, ALLOWED_PRESET_MODELS, and Gemini 4 config router', () => {
+  const brainIds = BRAIN_ENGINE_OPTIONS.map((b) => b.id);
+  assert.ok(brainIds.includes('gemini-4-argon'));
+  assert.ok(brainIds.includes('gemini-4-carbon'));
+  assert.ok(brainIds.includes('gemini-4-hydrogen'));
+  assert.ok(ALLOWED_PRESET_MODELS.includes('gemini-4-carbon'));
+  assert.ok(ALLOWED_PRESET_MODELS.includes('gemini-4-hydrogen'));
+
+  const carbonRoute = resolveBrainEngineRoute('gemini-4-carbon');
+  assert.equal(carbonRoute.provider, 'gemini');
+  assert.equal(carbonRoute.model, 'gemini-4-carbon');
+
+  const hydrogenRoute = resolveBrainEngineRoute('gemini-4-hydrogen');
+  assert.equal(hydrogenRoute.provider, 'gemini');
+  assert.equal(hydrogenRoute.model, 'gemini-4-hydrogen');
+
+  assert.equal(isGemini3Or4Model('gemini-4-carbon'), true);
+  assert.equal(isGemini3Or4Model('gemini-4-hydrogen'), true);
+
+  const carbonThinking = resolveThinkingConfig('high', 'gemini-4-carbon');
+  assert.deepEqual(carbonThinking, {
+    thinkingConfig: { thinkingLevel: 'HIGH' },
+    thinkingUsed: 'HIGH',
+  });
+
+  const hydrogenThinking = resolveThinkingConfig('low', 'gemini-4-hydrogen');
+  assert.deepEqual(hydrogenThinking, {
+    thinkingConfig: { thinkingLevel: 'LOW' },
+    thinkingUsed: 'LOW',
+  });
+
+  const sanitizedCarbon = sanitizeGeminiConfig(
+    { temperature: 0.8, topP: 0.9, topK: 40, thinkingBudget: 4096 },
+    'gemini-4-carbon'
+  );
+  assert.equal((sanitizedCarbon as any).temperature, undefined);
+  assert.equal((sanitizedCarbon as any).thinkingBudget, undefined);
 });
 
 

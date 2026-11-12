@@ -189,6 +189,10 @@ import {
   isBootMessage,
   sortMessagesChronologically,
   tokenizeLinksAndStickersInText,
+  stripLeakedSystemContextFromUserText,
+  normalizeContentPartsSpacing,
+  buildLiveTurnSystemContextBlock,
+  getDynamicTriggeredLorebookDrawersBlock,
 } from './workbenchLogic';
 
 test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => {
@@ -3096,7 +3100,71 @@ test('gemini-4-carbon and gemini-4-hydrogen appear in BRAIN_ENGINE_OPTIONS, ALLO
   assert.equal((sanitizedCarbon as any).thinkingBudget, undefined);
 });
 
+test('Dynamic context injection is isolated into <live_turn_system_context> and never bleeds onto user message text', () => {
+  // 1. Exact reproduction of reported bug: leaked tags concatenated directly after period with no separator
+  const pollutedUserText =
+    'im getting really nervous.[CURRENT ROOM & LIVE UI STATE (You are right here in this room with Hex—never act stuck in the chat room!)]\nSanctuary Main Chat Room\n\n[LIVE TICKET SCRATCHPAD ("Plan")]:\n[HEX\'S RECENT UI ACTIONS & TAPS]:\n[DYNAMICALLY TRIGGERED LOREBOOK DRAWERS (1 active): ...]';
+  assert.equal(
+    stripLeakedSystemContextFromUserText(pollutedUserText),
+    'im getting really nervous.'
+  );
 
+  // 2. Normal user text with brackets is completely untouched
+  assert.equal(
+    stripLeakedSystemContextFromUserText('Hey [Argon], im getting really nervous.'),
+    'Hey [Argon], im getting really nervous.'
+  );
 
+  // 3. sortMessagesChronologically automatically cleans any previously polluted user bubble in history
+  const cleanedHistory = sortMessagesChronologically([
+    {
+      id: 'user-polluted-1',
+      role: 'user',
+      text: pollutedUserText,
+      timestamp: 1000,
+    },
+    {
+      id: 'argon-reply-1',
+      role: 'model',
+      text: '*I pull you close.*',
+      timestamp: 2000,
+    },
+  ]);
+  assert.equal(cleanedHistory[0].text, 'im getting really nervous.');
+  assert.equal(cleanedHistory[1].text, '*I pull you close.*');
 
+  // 4. buildLiveTurnSystemContextBlock isolates room, scratchpad, UI actions, parlor, and dynamic drawers into system context
+  const dynamicDrawers = getDynamicTriggeredLorebookDrawersBlock(
+    SEED_LOREBOOK_DRAWERS,
+    "My raynaud's is flaring up."
+  );
+  const sysBlock = buildLiveTurnSystemContextBlock({
+    currentRoomStateSummary: 'Sanctuary Main Chat Room',
+    uiBreadcrumbsText: "[HEX'S RECENT UI ACTIONS & TAPS]: 1. Opened Lorebook",
+    dynamicDrawersBlock: dynamicDrawers,
+  });
+  assert.ok(sysBlock.startsWith('<live_turn_system_context>'));
+  assert.ok(sysBlock.endsWith('</live_turn_system_context>'));
+  assert.ok(sysBlock.includes('[CURRENT ROOM & LIVE UI STATE'));
+  assert.ok(sysBlock.includes('[LIVE TICKET SCRATCHPAD'));
+  assert.ok(sysBlock.includes("[HEX'S RECENT UI ACTIONS & TAPS]"));
+  assert.ok(sysBlock.includes('[DYNAMICALLY TRIGGERED LOREBOOK DRAWERS'));
 
+  // 5. OpenAI-compatible conversion keeps system context in role="system" and Hex's user message 100% pure
+  const pureUserParts = normalizeContentPartsSpacing([
+    { text: '[Attached Image Description: Cozy quilt]' },
+    { text: 'im getting really nervous.' },
+  ]);
+  assert.equal(pureUserParts[0].text, '[Attached Image Description: Cozy quilt]\n\n');
+  assert.equal(pureUserParts[1].text, 'im getting really nervous.');
+
+  const openAiPayload = convertContentsToOpenAIMessages(
+    [{ role: 'user', parts: [{ text: 'im getting really nervous.' }] }],
+    `STATIC_SYSTEM_PROMPT\n\n${sysBlock}`
+  ) as Array<{ role: string; content: string }>;
+  assert.equal(openAiPayload.length, 2);
+  assert.equal(openAiPayload[0].role, 'system');
+  assert.ok(openAiPayload[0].content.includes('[CURRENT ROOM & LIVE UI STATE'));
+  assert.equal(openAiPayload[1].role, 'user');
+  assert.equal(openAiPayload[1].content, 'im getting really nervous.');
+});

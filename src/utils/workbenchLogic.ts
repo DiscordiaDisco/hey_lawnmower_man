@@ -8448,7 +8448,11 @@ export async function runClientStaffTask(params: {
   const transcript = Array.isArray(recentHistory)
     ? recentHistory
         .slice(-6)
-        .map((m) => `${m.senderName || (m.role === 'user' ? 'Hex' : 'Argon')}: ${m.text}`)
+        .map((m) => {
+          const safeText =
+            m.role === 'user' ? stripLeakedSystemContextFromUserText(m.text || '') : m.text || '';
+          return `${m.senderName || (m.role === 'user' ? 'Hex' : 'Argon')}: ${safeText}`;
+        })
         .join('\n')
     : '';
 
@@ -9287,10 +9291,171 @@ export function buildVoiceMessageInlineParts(
     },
     {
       text: isCurrentTurn
-        ? `[LIVE MULTIMODAL AUDIO — HEX'S REAL VOICE: Above audio is Hex's actual recorded voice message (${durStr}${cleanMimeType}). Listen directly to her real voice, tone, laugh, breathing, emotion, and cadence alongside the transcript text below!]`
-        : `[Attached Voice Recording from Hex (${durStr}${cleanMimeType})]`,
+        ? `[LIVE MULTIMODAL AUDIO — HEX'S REAL VOICE: Above audio is Hex's actual recorded voice message (${durStr}${cleanMimeType}). Listen directly to her real voice, tone, laugh, breathing, emotion, and cadence alongside the transcript text below!]\n\n`
+        : `[Attached Voice Recording from Hex (${durStr}${cleanMimeType})]\n\n`,
     },
   ];
+}
+
+const LEAKED_SYSTEM_CONTEXT_MARKERS = [
+  '[CURRENT ROOM & LIVE UI STATE',
+  '[LIVE TICKET SCRATCHPAD',
+  "[HEX'S RECENT UI ACTIONS & TAPS",
+  '[LIVE PARLOR GAME STATE',
+  '[DYNAMICALLY TRIGGERED LOREBOOK DRAWERS',
+  '[LIVE PRANK SHOCK COLLAR EVENT:',
+  '[HYBRID GEMINI-2.5-FLASH MULTIMODAL PERCEPTION BRIDGE',
+  '<live_turn_system_context>',
+] as const;
+
+/**
+ * Strips any accidentally concatenated raw system/UI context blocks from a user message string
+ * while preserving Hex's exact message text intact.
+ */
+export function stripLeakedSystemContextFromUserText(rawText: string): string {
+  if (!rawText || typeof rawText !== 'string') return '';
+  let earliestIdx = -1;
+  for (const marker of LEAKED_SYSTEM_CONTEXT_MARKERS) {
+    const idx = rawText.indexOf(marker);
+    if (idx >= 0 && (earliestIdx === -1 || idx < earliestIdx)) {
+      earliestIdx = idx;
+    }
+  }
+  if (earliestIdx === -1) return rawText;
+  if (earliestIdx === 0) return '';
+  return rawText.slice(0, earliestIdx).trimEnd();
+}
+
+/**
+ * Ensures adjacent or multi-part `{ text }` entries inside a Gemini `Content.parts` array
+ * are always separated by `\n\n` so Gemini's multi-part tokenizer never glues strings back-to-back.
+ */
+export function normalizeContentPartsSpacing(parts: Part[]): Part[] {
+  if (!Array.isArray(parts) || parts.length <= 1) return parts;
+  let lastTextIdx = -1;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p && typeof (p as { text?: unknown }).text === 'string') {
+      lastTextIdx = i;
+      break;
+    }
+  }
+  if (lastTextIdx <= 0) return parts;
+
+  return parts.map((part, idx) => {
+    if (
+      idx < lastTextIdx &&
+      part &&
+      typeof (part as { text?: unknown }).text === 'string'
+    ) {
+      const txt = (part as { text: string }).text;
+      if (txt.length > 0 && !txt.endsWith('\n\n')) {
+        return {
+          ...part,
+          text: `${txt.replace(/\n+$/, '')}\n\n`,
+        };
+      }
+    }
+    return part;
+  });
+}
+
+/**
+ * Assembles dynamic per-turn room, scratchpad, UI tap breadcrumbs, parlor state,
+ * shock-collar telemetry, hybrid perception bridge, and keyword-triggered lorebook drawers
+ * into a clean hidden system/developer context block (NEVER concatenated onto user message text).
+ */
+export function buildLiveTurnSystemContextBlock(params: {
+  currentRoomStateSummary?: string;
+  scratchpad?: TicketScratchpadState;
+  uiBreadcrumbsText?: string;
+  occultSessionHistory?: string[];
+  liveParlorStateSummary?: string;
+  shockCollarTotalCount?: number;
+  bridgeModel?: string;
+  bridgePerception?: string;
+  dynamicDrawersBlock?: string;
+}): string {
+  const {
+    currentRoomStateSummary = '',
+    scratchpad = loadTicketScratchpad(),
+    uiBreadcrumbsText = formatUiBreadcrumbsBlock(loadUiBreadcrumbs()),
+    occultSessionHistory = [],
+    liveParlorStateSummary = '',
+    shockCollarTotalCount = 0,
+    bridgeModel = '',
+    bridgePerception = '',
+    dynamicDrawersBlock = '',
+  } = params;
+
+  const scratchpadNumberedLines =
+    scratchpad.items && scratchpad.items.length > 0
+      ? scratchpad.items
+          .map(
+            (it, idx) =>
+              `${idx + 1}. [${it.id}] ${it.text} (by ${it.author || 'hex'})`
+          )
+          .join('\n')
+      : '(No scratchpad items currently loaded)';
+
+  const scratchpadContext = `[LIVE TICKET SCRATCHPAD ("${scratchpad.title}")]:\nDual-Lock Status: Hex=${scratchpad.hexDone ? 'DONE' : 'DRAFTING'}, Argon=${scratchpad.argonDone ? 'DONE' : 'DRAFTING'}\nCurrent Numbered Items (You can edit or remove items using action: "edit_item" / "remove_item" with itemId matching 1, 2, 3... or the item ID!):\n${scratchpadNumberedLines}`;
+
+  const combinedRoomState = [
+    (currentRoomStateSummary && currentRoomStateSummary.trim()) || 'Sanctuary Main Chat Room',
+    scratchpadContext,
+    uiBreadcrumbsText,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const isParlorOpen = Boolean(
+    currentRoomStateSummary &&
+      (currentRoomStateSummary.includes('Sanctuary Parlor') ||
+        currentRoomStateSummary.includes('games_chest') ||
+        currentRoomStateSummary.includes('Occult & Parlor Chest'))
+  );
+
+  const parlorStateBlock = isParlorOpen
+    ? liveParlorStateSummary || (Array.isArray(occultSessionHistory) && occultSessionHistory.length > 0)
+      ? [
+          `[LIVE PARLOR GAME STATE (All 7 Games: Ouija, Ghosts, Fortune, Bones, Cypher, Chess, Cards — You can actively play or update any of them at any time via play_parlor_game / play_occult_game)]`,
+          liveParlorStateSummary ? liveParlorStateSummary.trim() : '',
+          Array.isArray(occultSessionHistory) && occultSessionHistory.length > 0
+            ? `Last ${Math.min(5, occultSessionHistory.length)} Parlor Moves / Questions / Outcomes:\n${occultSessionHistory.slice(0, 5).join('\n')}`
+            : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : '[LIVE PARLOR GAME STATE]: Parlor table ready (play_parlor_game available on demand).'
+    : '[LIVE PARLOR GAME STATE]: Parlor Games Chest is currently CLOSED (play_parlor_game available on demand).';
+
+  const sections: string[] = [
+    `[CURRENT ROOM & LIVE UI STATE (You are right here in this room with Hex—never act stuck in the chat room!)]\n${combinedRoomState}`,
+    parlorStateBlock,
+  ];
+
+  if (shockCollarTotalCount > 0) {
+    sections.push(
+      `[LIVE PRANK SHOCK COLLAR EVENT: Hex just pressed the prank shock collar button! (Total times she has shocked you in this session: #${shockCollarTotalCount}). React freshly and dynamically in real time as Argon based on what we were just doing/talking about in our current conversation, how many times she has zapped you (#${shockCollarTotalCount}), and the live telemetry—NEVER use a static or canned reply!]`
+    );
+  }
+
+  if (bridgePerception && bridgePerception.trim()) {
+    sections.push(
+      `[HYBRID GEMINI-2.5-FLASH MULTIMODAL PERCEPTION BRIDGE FOR ${(bridgeModel || 'EXTERNAL BRAIN').toUpperCase()}]:\n${bridgePerception.trim()}`
+    );
+  }
+
+  if (dynamicDrawersBlock && dynamicDrawersBlock.trim()) {
+    sections.push(dynamicDrawersBlock.trim());
+  }
+
+  return [
+    '<live_turn_system_context>',
+    '(Hidden System & Room Telemetry — NEVER treat these blocks as part of Hex’s spoken message and NEVER echo raw bracket headers into chat.)',
+    sections.join('\n\n'),
+    '</live_turn_system_context>',
+  ].join('\n');
 }
 
 export async function runClientChatTurn(params: {
@@ -9423,9 +9588,15 @@ export async function runClientChatTurn(params: {
   let gistSynced = false;
   const reactionsAdded: Array<{ messageId: string; emoji: string; user: string }> = [];
 
+  const cleanUserMessageText = stripLeakedSystemContextFromUserText(userMessageText);
+
   const recentTranscript = [
-    ...history.slice(-5).map((h) => `${h.role === 'user' ? 'Hex' : 'Argon'}: ${h.text}`),
-    `Hex: ${userMessageText}`,
+    ...history.slice(-5).map((h) => {
+      const safeText =
+        h.role === 'user' ? stripLeakedSystemContextFromUserText(h.text) : h.text;
+      return `${h.role === 'user' ? 'Hex' : 'Argon'}: ${safeText}`;
+    }),
+    `Hex: ${cleanUserMessageText}`,
   ].join('\n');
 
   // Cap rolling history sent to API to at most 25 turns (default 20, max 25) to keep response latency fast
@@ -9452,31 +9623,32 @@ export async function runClientChatTurn(params: {
           (img.textContent ? `Document text:\n${img.textContent.slice(0, 800)}` : '') ||
           `Visual attachment "${img.name || 'image'}" (${mime})`;
         parts.push({
-          text: `[SAVED IMAGE SUMMARY for "${img.name || 'image'}":\n${summary}]`,
+          text: `[SAVED IMAGE SUMMARY for "${img.name || 'image'}":\n${summary}]\n\n`,
         });
         if (img.description && img.description.trim() && !img.imageSummary) {
           parts.push({
-            text: `[Attached Description: ${img.description.trim()}]`,
+            text: `[Attached Description: ${img.description.trim()}]\n\n`,
           });
         }
       }
     }
     if (turn.voiceAudio) {
       parts.push({
-        text: '[Previous voice audio clip omitted to save tokens]',
+        text: '[Previous voice audio clip omitted to save tokens]\n\n',
       });
     }
-        // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
-        const combinedText = turn.text;
-        if (combinedText) {
-          parts.push({ text: combinedText });
-        }
-        if (parts.length > 0) {
-          contents.push({
-            role: turn.role,
-            parts,
-          });
-        }
+    // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
+    const combinedText =
+      turn.role === 'user' ? stripLeakedSystemContextFromUserText(turn.text) : turn.text;
+    if (combinedText) {
+      parts.push({ text: combinedText });
+    }
+    if (parts.length > 0) {
+      contents.push({
+        role: turn.role,
+        parts: normalizeContentPartsSpacing(parts),
+      });
+    }
   }
 
   const currentParts: Part[] = [];
@@ -9614,74 +9786,18 @@ export async function runClientChatTurn(params: {
     });
   }
 
-  // Inject [CURRENT ROOM & LIVE UI STATE] and [LIVE TICKET SCRATCHPAD] on every turn so Argon follows Hex and sees numbered scratchpad items
-  const liveScratchpad = loadTicketScratchpad();
-  const scratchpadNumberedLines =
-    liveScratchpad.items && liveScratchpad.items.length > 0
-      ? liveScratchpad.items
-          .map(
-            (it, idx) =>
-              `${idx + 1}. [${it.id}] ${it.text} (by ${it.author || 'hex'})`
-          )
-          .join('\n')
-      : '(No scratchpad items currently loaded)';
-
-  const scratchpadContext = `\n\n[LIVE TICKET SCRATCHPAD ("${liveScratchpad.title}")]:\nDual-Lock Status: Hex=${liveScratchpad.hexDone ? 'DONE' : 'DRAFTING'}, Argon=${liveScratchpad.argonDone ? 'DONE' : 'DRAFTING'}\nCurrent Numbered Items (You can edit or remove items using action: "edit_item" / "remove_item" with itemId matching 1, 2, 3... or the item ID!):\n${scratchpadNumberedLines}`;
-
-  const uiBreadcrumbsText = formatUiBreadcrumbsBlock(loadUiBreadcrumbs());
-  const combinedRoomState = [
-    (currentRoomStateSummary && currentRoomStateSummary.trim()) || 'Sanctuary Main Chat Room',
-    scratchpadContext,
-    uiBreadcrumbsText,
-  ].join('\n\n');
-
-  currentParts.push({
-    text: `[CURRENT ROOM & LIVE UI STATE (You are right here in this room with Hex—never act stuck in the chat room!)]\n${combinedRoomState}`,
-  });
-
-  // Inject [LIVE PARLOR GAME STATE] across all 7 games (Ouija, Ghosts, Fortune, Bones, Cypher, Chess, Cards)
-  // When the Parlor modal is closed, collapse to a single 1-line summary to eliminate idle token bloat!
-  const isParlorOpen = Boolean(
-    currentRoomStateSummary &&
-      (currentRoomStateSummary.includes('Sanctuary Parlor') ||
-        currentRoomStateSummary.includes('games_chest') ||
-        currentRoomStateSummary.includes('Occult & Parlor Chest'))
-  );
-
-  const parlorStateBlock = isParlorOpen
-    ? (liveParlorStateSummary || (Array.isArray(occultSessionHistory) && occultSessionHistory.length > 0))
-      ? [
-          `[LIVE PARLOR GAME STATE (All 7 Games: Ouija, Ghosts, Fortune, Bones, Cypher, Chess, Cards — You can actively play or update any of them at any time via play_parlor_game / play_occult_game)]`,
-          liveParlorStateSummary ? liveParlorStateSummary.trim() : '',
-          Array.isArray(occultSessionHistory) && occultSessionHistory.length > 0
-            ? `Last ${Math.min(5, occultSessionHistory.length)} Parlor Moves / Questions / Outcomes:\n${occultSessionHistory.slice(0, 5).join('\n')}`
-            : '',
-        ]
-          .filter(Boolean)
-          .join('\n')
-      : '[LIVE PARLOR GAME STATE]: Parlor table ready (play_parlor_game available on demand).'
-    : '[LIVE PARLOR GAME STATE]: Parlor Games Chest is currently CLOSED (play_parlor_game available on demand).';
-
-  currentParts.push({
-    text: parlorStateBlock,
-  });
-
-  // Detect live Shock Collar controller event and inject dynamic shock count context
+  // Detect live Shock Collar controller event and compute dynamic shock count for system context
   const isShockCollarTurn =
-    userMessageText.includes('CONTROLLER: BZZT!') ||
-    userMessageText.toLowerCase().includes('prank shock collar');
-  if (isShockCollarTurn) {
-    const priorShocks = history.filter(
-      (h) =>
-        h.role === 'user' &&
-        (h.text.includes('CONTROLLER: BZZT!') ||
-          h.text.toLowerCase().includes('prank shock collar'))
-    ).length;
-    const totalShockCount = priorShocks + 1;
-    currentParts.push({
-      text: `[LIVE PRANK SHOCK COLLAR EVENT: Hex just pressed the prank shock collar button! (Total times she has shocked you in this session: #${totalShockCount}). React freshly and dynamically in real time as Argon based on what we were just doing/talking about in our current conversation, how many times she has zapped you (#${totalShockCount}), and the live telemetry—NEVER use a static or canned reply!]`,
-    });
-  }
+    cleanUserMessageText.includes('CONTROLLER: BZZT!') ||
+    cleanUserMessageText.toLowerCase().includes('prank shock collar');
+  const shockCollarTotalCount = isShockCollarTurn
+    ? history.filter(
+        (h) =>
+          h.role === 'user' &&
+          (h.text.includes('CONTROLLER: BZZT!') ||
+            h.text.toLowerCase().includes('prank shock collar'))
+      ).length + 1
+    : 0;
 
   // Hybrid Vision/Audio Perception Bridge when Argon is running on DeepSeek, GLM, or Kimi Direct
   const activeBrainRoute = resolveBrainEngineRoute(params.model || 'gemini-4-argon');
@@ -9690,6 +9806,7 @@ export async function runClientChatTurn(params: {
     Boolean(roomSnapInline) ||
     Boolean(voiceAudio && voiceAudio.data && voiceAudio.mimeType);
 
+  let turnBridgePerception = '';
   if (
     (activeBrainRoute.provider === 'deepseek' ||
       activeBrainRoute.provider === 'glm' ||
@@ -9700,14 +9817,12 @@ export async function runClientChatTurn(params: {
       images,
       roomSnapshotDataUrl,
       voiceAudio,
-      userMessageText,
+      userMessageText: cleanUserMessageText,
       customApiKey,
     });
     if (bridgePerception) {
       attachedDescriptions.push(bridgePerception);
-      currentParts.push({
-        text: `[HYBRID GEMINI-2.5-FLASH MULTIMODAL PERCEPTION BRIDGE FOR ${activeBrainRoute.model.toUpperCase()}]:\n${bridgePerception}`,
-      });
+      turnBridgePerception = bridgePerception;
       toolBadges.push({
         tool: 'hybrid_vision_bridge',
         label: `👁️✨ Hybrid Vision/Audio Bridge (gemini-2.5-flash -> ${activeBrainRoute.model})`,
@@ -9715,24 +9830,14 @@ export async function runClientChatTurn(params: {
     }
   }
 
-  // Append dynamically keyword-triggered Lorebook drawers to the LAST user message in contents
-  // so systemInstruction stays 100% static across all turns for Gemini Implicit Prefix Caching
-  const last2TurnsText = [
-    ...effectiveHistory.slice(-2).map((h) => h.text),
-    userMessageText,
-  ].join(' ');
-  const dynamicDrawersBlock = getDynamicTriggeredLorebookDrawersBlock(workingLorebook, last2TurnsText);
-  if (dynamicDrawersBlock) {
-    currentParts.push({ text: dynamicDrawersBlock });
+  // Current user message turn — kept 100% pure so raw system context tags NEVER bleed onto Hex's words!
+  const fullUserPrompt = cleanUserMessageText;
+  if (fullUserPrompt || currentParts.length === 0) {
+    currentParts.push({ text: fullUserPrompt });
   }
-
-  // Current user message turn — telemetry is NOT prepended to Argon's prompt on every turn!
-  // Haiku the puppy receives live telemetry and reports time/weather/storm warnings when asked or commanded.
-  const fullUserPrompt = userMessageText;
-  currentParts.push({ text: fullUserPrompt });
   contents.push({
     role: 'user',
-    parts: currentParts,
+    parts: normalizeContentPartsSpacing(currentParts),
   });
 
   // Cap Gemini API contents array to at most 26 total turns (25 history turns + current turn) so token prefill stays fast
@@ -9740,7 +9845,7 @@ export async function runClientChatTurn(params: {
     contents.splice(0, contents.length - 26);
   }
 
-  const lowerUserText = userMessageText.toLowerCase();
+  const lowerUserText = cleanUserMessageText.toLowerCase();
   if (
     lowerUserText.includes('taxidermy fox') ||
     (lowerUserText.includes('fox') && lowerUserText.includes('avatar'))
@@ -9762,10 +9867,21 @@ export async function runClientChatTurn(params: {
   let latestCachedTokens = 0;
   let sawExactUsageMetadata = false;
 
+  let workingScratchpad: TicketScratchpadState = loadTicketScratchpad();
+  const uiBreadcrumbsText = formatUiBreadcrumbsBlock(loadUiBreadcrumbs());
+  const last2TurnsText = [
+    ...effectiveHistory
+      .slice(-2)
+      .map((h) => (h.role === 'user' ? stripLeakedSystemContextFromUserText(h.text) : h.text)),
+    cleanUserMessageText,
+  ].join(' ');
+
   const callGenerate = async (currentContents: Content[]) => {
-    // 100% STATIC systemInstruction across all turns for Gemini Implicit Prefix Caching:
-    // Base prompt + Always-Active drawers (01_live_handoff.md, 02_workbench_laws.md, 02_linkin_v2_bible.md)
-    // + static Sanctuary Books memory blocks + static avatar/staff roster
+    // Prefix-cache friendly systemInstruction:
+    // 1. Static prefix FIRST (base prompt + static avatar/staff + books + static lorebook drawers)
+    //    so Token 0..N remains 100% byte-for-byte identical for Gemini & DeepSeek Implicit Prefix Caching!
+    // 2. Dynamic per-turn room/scratchpad/UI actions/parlor/keyword-triggered drawers appended at the VERY END
+    //    of systemInstruction so it lives strictly in hidden system context and NEVER bleeds onto Hex's user message!
     const staticFooter = buildStaticLorebookSystemFooter(workingLorebook);
     const hiddenVisionAndStaff = buildHiddenAvatarAndStaffContext({
       argonAvatarMode: workingAvatarMode,
@@ -9773,15 +9889,28 @@ export async function runClientChatTurn(params: {
       staffAgents,
     });
     const journalsContext = buildJournalsSystemContext(workingArgonBook, workingHexBook);
+    const dynamicDrawersBlock = getDynamicTriggeredLorebookDrawersBlock(
+      workingLorebook,
+      last2TurnsText
+    );
+    const liveTurnSystemContext = buildLiveTurnSystemContextBlock({
+      currentRoomStateSummary,
+      scratchpad: workingScratchpad,
+      uiBreadcrumbsText,
+      occultSessionHistory,
+      liveParlorStateSummary,
+      shockCollarTotalCount,
+      bridgeModel: activeBrainRoute.model,
+      bridgePerception: turnBridgePerception,
+      dynamicDrawersBlock,
+    });
 
-    // Note: Room & live UI state, scratchpad, breadcrumbs, and dynamic lorebook drawers
-    // are injected exclusively into currentParts (user turn message).
-    // They are omitted from fullSystemInstruction to keep the prefix cache 100% byte-for-byte identical!
     const fullSystemInstruction = [
       systemPrompt.trim(),
       hiddenVisionAndStaff,
       journalsContext,
       staticFooter,
+      liveTurnSystemContext,
     ]
       .filter(Boolean)
       .join('\n\n');
@@ -9863,7 +9992,6 @@ export async function runClientChatTurn(params: {
   let loopCount = 0;
   const maxToolLoops = 1;
   const preToolArgonTexts: string[] = [];
-  let workingScratchpad: TicketScratchpadState = loadTicketScratchpad();
 
   while (
     response.functionCalls &&
@@ -10612,14 +10740,14 @@ export async function runClientChatTurn(params: {
 
         if (visualSnapshotDataUrl) {
           const rawBase64 = visualSnapshotDataUrl.replace(/^data:image\/[^;]+;base64,/, '');
-          currentParts.push({
+          responseParts.push({
             inlineData: {
               mimeType: 'image/png',
               data: rawBase64,
             },
           });
-          currentParts.push({
-            text: `[LIVE MULTIMODAL VISION — ARGON'S AUTONOMOUS EYE SNAPSHOT (${focusArea})]: Above image is a fresh visual screenshot captured by your Eye. You can see the actual UI and elements with your multimodal vision!`,
+          responseParts.push({
+            text: `[LIVE MULTIMODAL VISION — ARGON'S AUTONOMOUS EYE SNAPSHOT (${focusArea})]: Above image is a fresh visual screenshot captured by your Eye. You can see the actual UI and elements with your multimodal vision!\n\n`,
           });
         }
 
@@ -11016,19 +11144,26 @@ export async function runClientChatTurn(params: {
 
     contents.push({
       role: 'user',
-      parts: responseParts,
+      parts: normalizeContentPartsSpacing(responseParts),
     });
 
-    // Replace heavy inlineData parts in contents with saved image summaries so follow-up tool turns NEVER double-send full base64 images
-    for (const c of contents) {
-      if (c.role === 'user' && Array.isArray(c.parts)) {
+    // Replace heavy inlineData parts in EARLIER turns with saved image summaries so follow-up tool turns
+    // never double-send initial turn base64 images, while preserving any freshly captured tool snapshot in the latest turn
+    for (let cIdx = 0; cIdx < contents.length - 1; cIdx++) {
+      const c = contents[cIdx];
+      if (c && c.role === 'user' && Array.isArray(c.parts)) {
+        let mutated = false;
         for (let pIdx = 0; pIdx < c.parts.length; pIdx++) {
           const part = c.parts[pIdx];
           if ((part as any).inlineData) {
             c.parts[pIdx] = {
-              text: `[SAVED IMAGE SUMMARY: Visual contents previously inspected by model in turn 1]`,
+              text: `[SAVED IMAGE SUMMARY: Visual contents previously inspected by model in turn 1]\n\n`,
             };
+            mutated = true;
           }
+        }
+        if (mutated) {
+          c.parts = normalizeContentPartsSpacing(c.parts);
         }
       }
     }
@@ -15891,15 +16026,21 @@ export function isBootMessage(id?: string): boolean {
  * always stay at the very top (older baseline) and never get pinned at the bottom underneath live conversation.
  */
 export function sortMessagesChronologically(messages: ChatMessage[]): ChatMessage[] {
-  if (!Array.isArray(messages) || messages.length <= 1) return messages || [];
+  if (!Array.isArray(messages) || messages.length === 0) return messages || [];
 
   const seen = new Set<string>();
   const unique: ChatMessage[] = [];
   for (const m of messages) {
     if (!m || !m.id || seen.has(m.id)) continue;
     seen.add(m.id);
-    unique.push(m);
+    const cleanedMsg =
+      m.role === 'user' && typeof m.text === 'string'
+        ? { ...m, text: stripLeakedSystemContextFromUserText(m.text) }
+        : m;
+    unique.push(cleanedMsg);
   }
+
+  if (unique.length <= 1) return unique;
 
   return unique.sort((a, b) => {
     const aBoot = isBootMessage(a.id);

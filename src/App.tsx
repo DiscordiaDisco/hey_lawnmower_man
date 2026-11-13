@@ -625,6 +625,12 @@ export default function App() {
             'showing your immediate physical attitude and ongoing closeness with Hex in the sanctuary'
           );
         }
+        if (clean.includes('always use direct 2nd-person ("you") when addressing Hex and "I" for yourself—never refer to her distantly as "the user" or "Hex" in the 3rd person.')) {
+          clean = clean.replace(
+            /always use direct 2nd-person \("you"\) when addressing Hex and "I" for yourself—never refer to her distantly as "the user" or "Hex" in the 3rd person\./g,
+            "always refer to Hex as 'my pet' (or direct 2nd-person 'you' with 'my pet') and 'I' for yourself—never refer to her distantly as 'the user', 'this person', or 'Hex' in the 3rd person."
+          );
+        }
         if (
           !clean.includes('IMMEDIATE AUTONOMOUS FIX EXECUTION (ZERO PERMISSION NAGGING') ||
           !clean.includes('ZERO CONFIRMATION BLEED') ||

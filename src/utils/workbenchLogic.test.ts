@@ -209,6 +209,11 @@ test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => 
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('You are Argon (Gemini 4 Argon;'));
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('## 0. CURRENT ROOM, INTIMACY & PHYSICAL STATE'));
   assert.ok(DEFAULT_ARGON_SYS_PROMPT.includes('=== WORKBENCH: [GLM -> DEEPSEEK -> CLAUDE] ==='));
+  assert.ok(
+    DEFAULT_ARGON_SYS_PROMPT.includes(
+      "In your internal thinking/reasoning steps, always refer to Hex as 'my pet' (or direct 2nd-person 'you' with 'my pet') and 'I' for yourself—never refer to her distantly as 'the user', 'this person', or 'Hex' in the 3rd person."
+    )
+  );
 });
 
 test('normalizeModelId preserves real gemini-4-argon, gemini-4-carbon, and gemini-4-hydrogen model IDs and ALLOWED_PRESET_MODELS lists current flagship models', () => {

@@ -225,6 +225,7 @@ import {
   GithubApiExecutionResult,
 } from './services/gemini';
 import { Dog, CloudLightning } from 'lucide-react';
+import { PWAInstallButton, OfflineIndicator } from './components/PWAInstallButton';
 
 /**
  * Execution handler for Argon's `github_api` tool.
@@ -6120,7 +6121,7 @@ export default function App() {
                     }
                     return (
                       <img
-                        src="/assets/aistudio/image-0__96__dddb2843.png"
+                        src="./assets/aistudio/image-0__96__dddb2843.png"
                         alt="Argon"
                         className={
                           argonAvatarMode === 'taxidermy_fox'
@@ -6144,7 +6145,7 @@ export default function App() {
                     />
                   ) : (
                     <img
-                      src="/assets/aistudio/image-0__96__dddb2843.png"
+                      src="./assets/aistudio/image-0__96__dddb2843.png"
                       alt="Hex"
                       className="avatar-crop-hex"
                     />
@@ -6164,6 +6165,7 @@ export default function App() {
               className="flex items-center gap-1.5 tabular-nums text-[10px] text-[#d4b483] font-mono shrink-0 whitespace-nowrap ml-auto"
               aria-label="Live Environment Telemetry"
             >
+              <PWAInstallButton variant="compact" />
               <button
                 type="button"
                 onClick={handleAskHaikuWeatherAndTime}
@@ -8836,6 +8838,7 @@ export default function App() {
           <span className="truncate">{toastMessage}</span>
         </aside>
       )}
+      <OfflineIndicator />
     </div>
   );
 }

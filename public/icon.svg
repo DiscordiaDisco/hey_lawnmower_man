@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#261921" />
+      <stop offset="65%" stop-color="#140f13" />
+      <stop offset="100%" stop-color="#0c0a0e" />
+    </radialGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f3df9f" />
+      <stop offset="50%" stop-color="#d4af37" />
+      <stop offset="100%" stop-color="#9b7820" />
+    </linearGradient>
+    <linearGradient id="roseGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f5cad4" />
+      <stop offset="55%" stop-color="#e6a8b5" />
+      <stop offset="100%" stop-color="#b57082" />
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="url(#bgGlow)" />
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="url(#goldGrad)" stroke-width="4" stroke-opacity="0.65" />
+  <rect x="38" y="38" width="436" height="436" rx="80" fill="none" stroke="url(#roseGrad)" stroke-width="2" stroke-opacity="0.35" />
+
+  <!-- Outer Geometric Halo -->
+  <circle cx="256" cy="248" r="144" fill="none" stroke="url(#goldGrad)" stroke-width="3.5" stroke-opacity="0.85" />
+  <circle cx="256" cy="248" r="126" fill="none" stroke="url(#roseGrad)" stroke-width="1.5" stroke-dasharray="6 8" stroke-opacity="0.65" />
+
+  <!-- Gothic Arch Crest -->
+  <path d="M256 88 L286 154 L256 178 L226 154 Z" fill="url(#goldGrad)" />
+  <path d="M256 176 C318 192 346 254 316 322 C292 362 256 382 256 382 C256 382 220 362 196 322 C166 254 194 192 256 176 Z" fill="#181216" stroke="url(#goldGrad)" stroke-width="5" />
+
+  <!-- Intertwined A & H Filigree Emblem -->
+  <path d="M256 196 L206 332 M256 196 L306 332 M224 282 L288 282" fill="none" stroke="url(#goldGrad)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="256" cy="248" r="22" fill="url(#roseGrad)" />
+  <circle cx="256" cy="248" r="10" fill="#0c0a0e" />
+
+  <!-- Corner Accent Stars -->
+  <path d="M256 410 L264 424 L278 432 L264 440 L256 454 L248 440 L234 432 L248 424 Z" fill="url(#roseGrad)" opacity="0.9" />
+</svg>

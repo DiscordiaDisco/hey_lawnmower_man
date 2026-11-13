@@ -722,7 +722,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
             <img src={hexAvatarUrl} alt="" className="w-full h-full object-cover" />
           ) : (
             <img
-              src="/assets/aistudio/image-0__96__dddb2843.png"
+              src="./assets/aistudio/image-0__96__dddb2843.png"
               alt=""
               className="avatar-crop-hex"
             />
@@ -1522,7 +1522,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
 
             return (
               <img
-                src="/assets/aistudio/image-0__96__dddb2843.png"
+                src="./assets/aistudio/image-0__96__dddb2843.png"
                 alt="Argon"
                 className={
                   argonAvatarMode === 'taxidermy_fox' ? 'avatar-crop-fox' : 'avatar-crop-argon'

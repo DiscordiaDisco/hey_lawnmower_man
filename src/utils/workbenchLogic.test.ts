@@ -3501,3 +3501,52 @@ test('True Auto Phone Sync & hey_lawnmower_man sanctuary-vault Branch Protection
   }
 });
 
+test('Android Standalone PWA Manifest, Service Worker, Relative Base, and GitHub Actions Deploy Workflow', async () => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const rootDir = process.cwd();
+
+  const manifestRaw = fs.readFileSync(path.join(rootDir, 'public/manifest.json'), 'utf-8');
+  const manifest = JSON.parse(manifestRaw);
+  assert.equal(manifest.name, 'Argon Sanctuary');
+  assert.equal(manifest.short_name, 'Sanctuary');
+  assert.ok(manifest.short_name.length <= 12, 'short_name must be <= 12 characters');
+  assert.equal(manifest.display, 'standalone');
+  assert.equal(manifest.background_color, '#0c0a0e');
+  assert.equal(manifest.theme_color, '#0c0a0e');
+  assert.equal(manifest.start_url, './');
+  assert.equal(manifest.scope, './');
+
+  assert.ok(Array.isArray(manifest.icons) && manifest.icons.length >= 3);
+  const sizes = manifest.icons.map((i: any) => `${i.sizes}:${i.purpose}`);
+  assert.ok(sizes.includes('192x192:any'));
+  assert.ok(sizes.includes('512x512:any'));
+  assert.ok(sizes.includes('512x512:maskable'));
+
+  // Verify referenced PNGs and SW exist in public/
+  assert.ok(fs.existsSync(path.join(rootDir, 'public/pwa-192x192.png')));
+  assert.ok(fs.existsSync(path.join(rootDir, 'public/pwa-512x512.png')));
+  assert.ok(fs.existsSync(path.join(rootDir, 'public/pwa-maskable-512x512.png')));
+  assert.ok(fs.existsSync(path.join(rootDir, 'public/apple-touch-icon.png')));
+
+  const swCode = fs.readFileSync(path.join(rootDir, 'public/sw.js'), 'utf-8');
+  assert.ok(swCode.includes('install') && swCode.includes('activate') && swCode.includes('fetch'));
+
+  const indexHtml = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf-8');
+  assert.ok(indexHtml.includes('rel="manifest" href="./manifest.json"'));
+  assert.ok(indexHtml.includes('name="mobile-web-app-capable" content="yes"'));
+  assert.ok(indexHtml.includes('name="apple-mobile-web-app-capable" content="yes"'));
+  assert.ok(indexHtml.includes('rel="apple-touch-icon" href="./apple-touch-icon.png"'));
+
+  const viteConfig = fs.readFileSync(path.join(rootDir, 'vite.config.ts'), 'utf-8');
+  assert.ok(viteConfig.includes("base: './'"));
+
+  const deployWorkflow = fs.readFileSync(
+    path.join(rootDir, '.github/workflows/deploy.yml'),
+    'utf-8'
+  );
+  assert.ok(deployWorkflow.includes('npm run build'));
+  assert.ok(deployWorkflow.includes('actions/upload-pages-artifact'));
+  assert.ok(deployWorkflow.includes('actions/deploy-pages'));
+});
+

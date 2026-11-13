@@ -72,6 +72,14 @@ class SanctuaryErrorBoundary extends Component<Props, State> {
 }
 
 try {
+  if (typeof document !== 'undefined') {
+    const bgUrl = new URL(
+      'assets/aistudio/cba6804f7672d8f0da1f25b3c6a5b600_2c529b40.webp',
+      document.baseURI
+    ).href;
+    document.documentElement.style.setProperty('--sanctuary-stage-bg', `url("${bgUrl}")`);
+  }
+
   const rootEl = document.getElementById('root');
   if (rootEl) {
     createRoot(rootEl).render(
@@ -82,5 +90,18 @@ try {
   }
 } catch (bootErr) {
   console.error('Fatal Sanctuary mount error:', bootErr);
+}
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    try {
+      const swUrl = new URL('sw.js', document.baseURI).href;
+      navigator.serviceWorker.register(swUrl).catch((err) => {
+        console.warn('[PWA] Service worker registration skipped:', err);
+      });
+    } catch {
+      // ignore service worker registration errors in unsupported contexts
+    }
+  });
 }
 

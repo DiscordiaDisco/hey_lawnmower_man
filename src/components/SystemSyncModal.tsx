@@ -45,6 +45,7 @@ import {
   LinkedSyncFileMeta,
 } from '../utils/workbenchLogic';
 import { ApothecaryIcon } from './ApothecaryIcon';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SystemSyncModalProps {
   isOpen: boolean;
@@ -1470,7 +1471,7 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
                   />
                 ) : (
                   <img
-                    src="/assets/aistudio/image-0__96__dddb2843.png"
+                    src="./assets/aistudio/image-0__96__dddb2843.png"
                     alt="Hex Default Avatar"
                     className="avatar-crop-hex"
                   />
@@ -1800,7 +1801,7 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
             <div className="flex items-center gap-3 min-w-0 max-w-full">
               <div className="w-14 h-14 overflow-hidden rounded-full border-2 border-[#c59b47] shrink-0 bg-[#120d0f] shadow-md">
                 <img
-                  src="/assets/aistudio/image-0__96__dddb2843.png"
+                  src="./assets/aistudio/image-0__96__dddb2843.png"
                   alt="Argon Current Avatar"
                   className={
                     argonAvatarMode === 'taxidermy_fox'
@@ -2159,6 +2160,8 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
               </p>
             </div>
           </div>
+
+          <PWAInstallButton variant="card" />
 
           {/* Persistent File Handle Status Card */}
           <div className="p-3 rounded-xl border border-[#D4AF37]/40 bg-[#161215]/80 space-y-2">

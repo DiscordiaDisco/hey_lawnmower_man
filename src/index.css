@@ -45,7 +45,7 @@
 /* Clean Vertical Gothic Library Portrait Wallpaper (No Baked-in UI) */
 .gothic-stage-bg {
   background-color: #0b090e;
-  background-image: url('/assets/aistudio/cba6804f7672d8f0da1f25b3c6a5b600_2c529b40.webp');
+  background-image: var(--sanctuary-stage-bg, url('/assets/aistudio/cba6804f7672d8f0da1f25b3c6a5b600_2c529b40.webp'));
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;

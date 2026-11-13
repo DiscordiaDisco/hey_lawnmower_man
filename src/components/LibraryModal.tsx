@@ -665,7 +665,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
             <div className="aspect-[768/1376] w-full max-w-[460px] relative select-none rounded-2xl overflow-hidden border-2 border-[#8e6d3b]/90 shadow-[0_0_50px_rgba(0,0,0,0.95)] bg-[#0d0907]">
               {/* High-Resolution Bookcase Backdrop */}
               <img
-                src="/library_bookshelf.jpg"
+                src="./library_bookshelf.jpg"
                 alt="Sanctuary Gothic Library Bookcase"
                 className="w-full h-full object-cover pointer-events-none select-none"
               />

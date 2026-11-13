@@ -178,8 +178,13 @@ import {
   writeSanctuaryLiveSyncFile,
   readSanctuaryLiveSyncFile,
   autoWriteThroughLocalSync,
+  autoWriteThroughLocalSyncDetailed,
+  pushSanctuaryStateToVaultBranch,
+  SANCTUARY_VAULT_BRANCH,
   loadCurioShelf,
   saveCurioShelf,
+  loadCreepyShrineState,
+  saveCreepyShrineState,
   loadStoredAgentFixRequests,
   saveStoredAgentFixRequests,
   pickAndLinkSyncFile,
@@ -808,6 +813,9 @@ export default function App() {
   const [linkedSyncFileMeta, setLinkedSyncFileMeta] = useState<LinkedSyncFileMeta | null>(() =>
     loadLinkedSyncFileMeta()
   );
+  const [localSyncRevision, setLocalSyncRevision] = useState<number>(0);
+  const autoPhoneSyncTimerRef = useRef<number | null>(null);
+  const lastAutoSyncDigestRef = useRef<string | null>(null);
 
   // 6. Weather/Pressure & Battery Telemetry (Persisted in localStorage; defaults to Kalamazoo, Michigan)
   const [weatherCoords, setWeatherCoords] = useState<{
@@ -2402,7 +2410,11 @@ export default function App() {
         lorebook,
         argonBook,
         hexBook,
+        curios: loadCurioShelf(),
         agentFixRequests: loadStoredAgentFixRequests(),
+        ticketScratchpad,
+        creepyShrine: loadCreepyShrineState(),
+        userPersona,
         systemPrompt,
         staffAgents,
         staffJobs,
@@ -2426,6 +2438,109 @@ export default function App() {
       setIsSyncingPhone(false);
     }
   };
+
+  // Listen for external modal / tool writes (Curios, Shrine, Spines, Scratchpad, Tickets, Persona, Handle Meta)
+  useEffect(() => {
+    const onDirty = () => setLocalSyncRevision((n) => n + 1);
+    const onMetaUpdated = () => setLinkedSyncFileMeta(loadLinkedSyncFileMeta());
+    window.addEventListener('argon-local-sync-dirty', onDirty);
+    window.addEventListener('argon-curio-shelf-updated', onDirty);
+    window.addEventListener('argon-creepy-shrine-updated', onDirty);
+    window.addEventListener('argon-linked-sync-meta-updated', onMetaUpdated);
+    return () => {
+      window.removeEventListener('argon-local-sync-dirty', onDirty);
+      window.removeEventListener('argon-curio-shelf-updated', onDirty);
+      window.removeEventListener('argon-creepy-shrine-updated', onDirty);
+      window.removeEventListener('argon-linked-sync-meta-updated', onMetaUpdated);
+    };
+  }, []);
+
+  // True Automatic Debounced Phone Sync: auto-writes sanctuary_live_sync.json whenever Books/Vault,
+  // Drawers, Persona/Settings, Curios, or Tickets change while a persistent file/folder handle is linked & connected.
+  useEffect(() => {
+    const currentCurios = loadCurioShelf();
+    const currentShrine = loadCreepyShrineState();
+    const digest = JSON.stringify({
+      argonBook,
+      hexBook,
+      lorebook,
+      userPersona,
+      systemPrompt,
+      staffAgents,
+      staffJobs,
+      selectedPresetModel,
+      agentFixRequests,
+      ticketScratchpad,
+      curios: currentCurios,
+      creepyShrine: currentShrine,
+    });
+
+    if (lastAutoSyncDigestRef.current === null) {
+      lastAutoSyncDigestRef.current = digest;
+      return;
+    }
+
+    if (digest === lastAutoSyncDigestRef.current) {
+      return;
+    }
+
+    if (autoPhoneSyncTimerRef.current) {
+      window.clearTimeout(autoPhoneSyncTimerRef.current);
+      autoPhoneSyncTimerRef.current = null;
+    }
+
+    if (linkedSyncFileMeta?.status !== 'connected') {
+      lastAutoSyncDigestRef.current = digest;
+      return;
+    }
+
+    autoPhoneSyncTimerRef.current = window.setTimeout(() => {
+      autoPhoneSyncTimerRef.current = null;
+      lastAutoSyncDigestRef.current = digest;
+      void autoWriteThroughLocalSyncDetailed(
+        {
+          lorebook,
+          argonBook,
+          hexBook,
+          curios: loadCurioShelf(),
+          agentFixRequests,
+          ticketScratchpad,
+          creepyShrine: loadCreepyShrineState(),
+          userPersona,
+          systemPrompt,
+          staffAgents,
+          staffJobs,
+        },
+        { allowPermissionPrompt: false }
+      ).then((res) => {
+        setLinkedSyncFileMeta(res.meta || loadLinkedSyncFileMeta());
+        if (res.method === 'direct_file' || res.method === 'direct_dir') {
+          setLocalSyncIsError(false);
+          setLocalSyncStatus(`✓ Auto-synced ${res.filename} (${formatLocalSyncTime()})`);
+        }
+      });
+    }, 1200);
+
+    return () => {
+      if (autoPhoneSyncTimerRef.current) {
+        window.clearTimeout(autoPhoneSyncTimerRef.current);
+        autoPhoneSyncTimerRef.current = null;
+      }
+    };
+  }, [
+    argonBook,
+    hexBook,
+    lorebook,
+    userPersona,
+    systemPrompt,
+    staffAgents,
+    staffJobs,
+    selectedPresetModel,
+    agentFixRequests,
+    ticketScratchpad,
+    localSyncRevision,
+    linkedSyncFileMeta?.status,
+  ]);
 
   const handleLoadFromPhoneFolder = async (file?: File) => {
     setIsSyncingPhone(true);
@@ -2466,7 +2581,27 @@ export default function App() {
       }
 
       if (Array.isArray(payload.agentFixRequests)) {
+        setAgentFixRequests(payload.agentFixRequests);
         saveStoredAgentFixRequests(payload.agentFixRequests);
+      }
+
+      if (payload.ticketScratchpad) {
+        setTicketScratchpad(payload.ticketScratchpad);
+        saveTicketScratchpad(payload.ticketScratchpad);
+      }
+
+      if (payload.creepyShrine) {
+        saveCreepyShrineState(payload.creepyShrine);
+      }
+
+      if (payload.userPersona) {
+        setUserPersona(payload.userPersona);
+        saveUserPersona(payload.userPersona);
+      }
+
+      if (typeof payload.systemPrompt === 'string' && payload.systemPrompt.trim()) {
+        setSystemPrompt(payload.systemPrompt);
+        safeLocalStorageSetItem(STORAGE_KEYS.SYS_PROMPT, payload.systemPrompt);
       }
 
       if (Array.isArray(payload.staffAgents)) {
@@ -3088,29 +3223,77 @@ export default function App() {
   };
 
   const handleNewChat = async () => {
-    // 1. Commit Lorebook Drawers (including 01_live_handoff.md), Sanctuary Books/Journals, Curios, and Tickets
+    // Cancel any pending debounced auto-sync timer before performing the immediate awaited flush
+    if (autoPhoneSyncTimerRef.current) {
+      window.clearTimeout(autoPhoneSyncTimerRef.current);
+      autoPhoneSyncTimerRef.current = null;
+    }
+
+    // 1. Commit Lorebook Drawers (including 01_live_handoff.md), Sanctuary Books/Journals, Persona, Curios, and Tickets
     safeLocalStorageSetItem(STORAGE_KEYS.LOREBOOK, JSON.stringify(lorebook));
     safeLocalStorageSetItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(argonBook));
     safeLocalStorageSetItem(STORAGE_KEYS.HEX_BOOK, JSON.stringify(hexBook));
     const currentCurios = loadCurioShelf();
     saveCurioShelf(currentCurios);
+    const currentShrine = loadCreepyShrineState();
+    saveCreepyShrineState(currentShrine);
+    saveUserPersona(userPersona);
+    safeLocalStorageSetItem(STORAGE_KEYS.SYS_PROMPT, systemPrompt);
+    safeLocalStorageSetItem(STORAGE_KEYS.STAFF_AGENTS, JSON.stringify(staffAgents));
+    safeLocalStorageSetItem(STORAGE_KEYS.STAFF_JOBS, JSON.stringify(staffJobs));
     safeLocalStorageSetItem(STORAGE_KEYS.AGENT_FIX_REQUESTS, JSON.stringify(agentFixRequests));
     saveTicketScratchpad(ticketScratchpad);
 
-    // Auto-sync locally to phone sync / IndexedDB
-    void autoWriteThroughLocalSync({
-      lorebook,
-      argonBook,
-      hexBook,
-      curios: currentCurios,
-    });
+    // Await automatic phone sync write flush BEFORE clearing messages
+    const phoneFlushResult = await autoWriteThroughLocalSyncDetailed(
+      {
+        lorebook,
+        argonBook,
+        hexBook,
+        curios: currentCurios,
+        agentFixRequests,
+        ticketScratchpad,
+        creepyShrine: currentShrine,
+        userPersona,
+        systemPrompt,
+        staffAgents,
+        staffJobs,
+      },
+      { allowPermissionPrompt: true }
+    );
+    setLinkedSyncFileMeta(phoneFlushResult.meta || loadLinkedSyncFileMeta());
+    if (phoneFlushResult.method === 'direct_file' || phoneFlushResult.method === 'direct_dir') {
+      setLocalSyncIsError(false);
+      setLocalSyncStatus(
+        `✓ Flushed to ${phoneFlushResult.filename} before Clear Chat (${formatLocalSyncTime()})`
+      );
+    }
 
-    // 2. Trigger GitHub Gist / cloud backup sync if configured
+    // 2. Trigger private Gist & dedicated `sanctuary-vault` branch backup if GitHub token is configured (NEVER main)
     if (githubToken && githubToken.trim()) {
       try {
-        await pushSanctuaryBooksToGist(argonBook, hexBook, true, true);
+        await Promise.allSettled([
+          pushSanctuaryBooksToGist(argonBook, hexBook, true, true),
+          pushSanctuaryStateToVaultBranch({
+            githubToken,
+            payload: compileSanctuaryLiveSyncPayload({
+              lorebook,
+              argonBook,
+              hexBook,
+              curios: currentCurios,
+              agentFixRequests,
+              ticketScratchpad,
+              creepyShrine: currentShrine,
+              userPersona,
+              systemPrompt,
+              staffAgents,
+              staffJobs,
+            }),
+            commitMessage: `chore(${SANCTUARY_VAULT_BRANCH}): Auto-backup Sanctuary state before Clear Chat`,
+          }),
+        ]);
       } catch (err) {
-        console.warn('Gist auto-backup during clear chat:', err);
+        console.warn('Cloud auto-backup during clear chat:', err);
       }
     }
 

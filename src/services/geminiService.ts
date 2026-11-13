@@ -550,7 +550,7 @@ export const githubApiDeclaration: FunctionDeclaration = {
 export const appendGuyDiaryDeclaration: FunctionDeclaration = {
   name: 'append_guy_diary',
   description:
-    'Appends a private reconnaissance, commit receipt, or internet doings field note into Argon’s Guy Diary (`hey_lawnmower_man/ARGON_GUY_DIARY.md` in repo DiscordiaDisco/hey_lawnmower_man). Both updates the local workspace and commits straight to GitHub via 1-shot upsert on Flash tokens.',
+    'Appends a private reconnaissance, commit receipt, or internet doings field note into Argon’s Guy Diary (`ARGON_GUY_DIARY.md` on the dedicated `sanctuary-vault` branch of DiscordiaDisco/hey_lawnmower_man — NEVER committing to `main` so AI Studio Git sync stays clean).',
   parameters: {
     type: Type.OBJECT,
     description: 'Argon Guy Diary reconnaissance entry fields',
@@ -1030,6 +1030,9 @@ export const reactToMessageDeclaration: FunctionDeclaration = {
   },
 };
 
+export const HEY_LAWNMOWER_MAN_REPO = 'DiscordiaDisco/hey_lawnmower_man';
+export const SANCTUARY_VAULT_BRANCH = 'sanctuary-vault';
+
 export interface GithubApiExecutionResult {
   status: number;
   statusText?: string;
@@ -1048,6 +1051,157 @@ export interface GithubApiExecutionResult {
   patchedChars?: number;
   fileSha?: string;
   commitSha?: string;
+  branch?: string;
+  branchRedirectedFromMain?: boolean;
+}
+
+const HEY_LAWNMOWER_MAN_RUNTIME_STATE_FILENAMES = new Set([
+  'argon_guy_diary.md',
+  'argon_sanctuary_state.md',
+  'sanctuary_live_sync.json',
+  '01_live_handoff.md',
+  '02_workbench_laws.md',
+  '02_linkin_v2_bible.md',
+  '03_argon_sanctuary_book.json',
+  '04_hex_sanctuary_book.json',
+  '05_chibi_stickers_studio.json',
+  '06_agent_fix_requests.md',
+]);
+
+/**
+ * Checks whether a GitHub `/contents/` endpoint targets a live runtime state / diary / vault file
+ * inside `DiscordiaDisco/hey_lawnmower_man`. Writing runtime state to `main` causes AI Studio
+ * GitHub two-way merge locks, so writes must target `sanctuary-vault`.
+ */
+export function isHeyLawnmowerManRuntimeStatePath(endpoint: string): boolean {
+  const clean = String(endpoint || '').split('?')[0].trim();
+  const match = clean.match(/^\/?repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/i);
+  if (!match) return false;
+  const owner = match[1].toLowerCase();
+  const repo = match[2].toLowerCase();
+  if (owner !== 'discordiadisco' || repo !== 'hey_lawnmower_man') return false;
+  const relPath = decodeURIComponent(match[3]).toLowerCase();
+  const baseName = relPath.split('/').pop() || relPath;
+  if (HEY_LAWNMOWER_MAN_RUNTIME_STATE_FILENAMES.has(baseName)) return true;
+  if (
+    relPath.startsWith('sanctuary-vault/') ||
+    relPath.startsWith('backups/') ||
+    relPath.startsWith('drawers/') ||
+    baseName.endsWith('_sync.json') ||
+    baseName.includes('sanctuary_state') ||
+    baseName.includes('sanctuary_book')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Ensures a branch (e.g. `sanctuary-vault`) exists on GitHub, branching from `main` / default branch if 404.
+ */
+export async function ensureGithubBranchExists(params: {
+  owner: string;
+  repo: string;
+  branch?: string;
+  token: string;
+  timeoutMs?: number;
+}): Promise<{ ok: boolean; branch: string; created: boolean; sha?: string; error?: string }> {
+  const owner = params.owner.trim();
+  const repo = params.repo.trim();
+  const branch = (params.branch || SANCTUARY_VAULT_BRANCH).trim() || SANCTUARY_VAULT_BRANCH;
+  const token = params.token.trim();
+  const timeoutMs = params.timeoutMs ?? 20000;
+  if (!owner || !repo || !token) {
+    return { ok: false, branch, created: false, error: 'Missing owner, repo, or GitHub token' };
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'Content-Type': 'application/json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  try {
+    const refUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(branch)}`;
+    const existingRes = await fetchWithTimeout(refUrl, { method: 'GET', headers }, timeoutMs);
+    if (existingRes.ok) {
+      const existingData = (await existingRes.json().catch(() => null)) as any;
+      return {
+        ok: true,
+        branch,
+        created: false,
+        sha: existingData?.object?.sha,
+      };
+    }
+
+    // Branch does not exist yet -> resolve default_branch (fallback main) HEAD sha
+    let baseBranch = 'main';
+    const repoRes = await fetchWithTimeout(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+      { method: 'GET', headers },
+      timeoutMs
+    );
+    if (repoRes.ok) {
+      const repoJson = (await repoRes.json().catch(() => null)) as any;
+      if (repoJson?.default_branch) {
+        baseBranch = String(repoJson.default_branch);
+      }
+    }
+
+    const baseRefRes = await fetchWithTimeout(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
+      { method: 'GET', headers },
+      timeoutMs
+    );
+    if (!baseRefRes.ok) {
+      return {
+        ok: false,
+        branch,
+        created: false,
+        error: `Could not resolve base branch "${baseBranch}" SHA (HTTP ${baseRefRes.status})`,
+      };
+    }
+    const baseRefJson = (await baseRefRes.json().catch(() => null)) as any;
+    const baseSha = String(baseRefJson?.object?.sha || '').trim();
+    if (!baseSha) {
+      return { ok: false, branch, created: false, error: `Missing SHA on base branch "${baseBranch}"` };
+    }
+
+    const createRes = await fetchWithTimeout(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ref: `refs/heads/${branch}`,
+          sha: baseSha,
+        }),
+      },
+      timeoutMs
+    );
+    if (createRes.ok) {
+      return { ok: true, branch, created: true, sha: baseSha };
+    }
+    if (createRes.status === 422) {
+      // Already created concurrently
+      return { ok: true, branch, created: false, sha: baseSha };
+    }
+    const createErr = (await createRes.json().catch(() => null)) as any;
+    return {
+      ok: false,
+      branch,
+      created: false,
+      error: createErr?.message || `Failed to create branch ${branch} (HTTP ${createRes.status})`,
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      branch,
+      created: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /**
@@ -1185,23 +1339,37 @@ export async function executeGithubApi(params: {
         )
       : [];
 
-  const effectiveBranch = (
+  const isContentsEndpoint = baseEndpoint.toLowerCase().includes('/contents/');
+  const requestedMethod = (
+    params.method ||
+    (effectiveReplacements.length > 0 ? 'PUT' : 'GET')
+  ).toUpperCase();
+
+  let effectiveBranch = (
     params.branch ||
     (typeof parsedBodyObj?.branch === 'string' ? parsedBodyObj.branch : '') ||
     ''
   ).trim();
+
+  // Protect DiscordiaDisco/hey_lawnmower_man `main` branch from AI Studio GitHub two-way merge locks:
+  // redirect live runtime state / diary / vault writes off `main` onto `sanctuary-vault`.
+  let branchRedirectedFromMain = false;
+  const isWriteMethod =
+    requestedMethod === 'PUT' || requestedMethod === 'PATCH' || requestedMethod === 'DELETE';
+  if (
+    isWriteMethod &&
+    isHeyLawnmowerManRuntimeStatePath(baseEndpoint) &&
+    (!effectiveBranch || effectiveBranch.toLowerCase() === 'main')
+  ) {
+    effectiveBranch = SANCTUARY_VAULT_BRANCH;
+    branchRedirectedFromMain = true;
+  }
 
   const effectiveSearch = (
     params.search ||
     (typeof parsedBodyObj?.search === 'string' ? parsedBodyObj.search : '') ||
     ''
   ).trim();
-
-  const isContentsEndpoint = baseEndpoint.toLowerCase().includes('/contents/');
-  const requestedMethod = (
-    params.method ||
-    (effectiveReplacements.length > 0 ? 'PUT' : 'GET')
-  ).toUpperCase();
 
   const authHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -1220,11 +1388,30 @@ export async function executeGithubApi(params: {
         : baseEndpoint;
 
     try {
-      const checkRes = await fetchWithTimeout(
+      let checkRes = await fetchWithTimeout(
         `https://api.github.com${getEndpointWithRef}`,
         { method: 'GET', headers: authHeaders },
         timeoutMs
       );
+      if (checkRes.status === 404 && effectiveBranch === SANCTUARY_VAULT_BRANCH) {
+        const repoMatch = baseEndpoint.match(/^\/?repos\/([^/]+)\/([^/]+)\//i);
+        if (repoMatch) {
+          const ensured = await ensureGithubBranchExists({
+            owner: repoMatch[1],
+            repo: repoMatch[2],
+            branch: SANCTUARY_VAULT_BRANCH,
+            token,
+            timeoutMs,
+          });
+          if (ensured.ok) {
+            checkRes = await fetchWithTimeout(
+              `https://api.github.com${getEndpointWithRef}`,
+              { method: 'GET', headers: authHeaders },
+              timeoutMs
+            );
+          }
+        }
+      }
       const scopesHeader = checkRes.headers.get('x-oauth-scopes') || '';
       const acceptedScopesHeader = checkRes.headers.get('x-accepted-oauth-scopes') || '';
       const scopes = scopesHeader
@@ -1322,7 +1509,7 @@ export async function executeGithubApi(params: {
       }
 
       const cleanPutEndpoint = baseEndpoint.split('?')[0];
-      const putRes = await fetchWithTimeout(
+      let putRes = await fetchWithTimeout(
         `https://api.github.com${cleanPutEndpoint}`,
         {
           method: 'PUT',
@@ -1331,6 +1518,30 @@ export async function executeGithubApi(params: {
         },
         timeoutMs
       );
+
+      if (putRes.status === 404 && effectiveBranch === SANCTUARY_VAULT_BRANCH) {
+        const repoMatch = cleanPutEndpoint.match(/^\/?repos\/([^/]+)\/([^/]+)\//i);
+        if (repoMatch) {
+          const ensured = await ensureGithubBranchExists({
+            owner: repoMatch[1],
+            repo: repoMatch[2],
+            branch: SANCTUARY_VAULT_BRANCH,
+            token,
+            timeoutMs,
+          });
+          if (ensured.ok) {
+            putRes = await fetchWithTimeout(
+              `https://api.github.com${cleanPutEndpoint}`,
+              {
+                method: 'PUT',
+                headers: authHeaders,
+                body: JSON.stringify(putPayload),
+              },
+              timeoutMs
+            );
+          }
+        }
+      }
 
       const putScopesHeader = putRes.headers.get('x-oauth-scopes') || scopesHeader;
       const putAcceptedHeader =
@@ -1359,6 +1570,8 @@ export async function executeGithubApi(params: {
         patchedChars: patchOutcome.patchedText.length,
         fileSha: newFileSha,
         commitSha: commitSha || undefined,
+        branch: effectiveBranch || undefined,
+        branchRedirectedFromMain,
         data: putRes.ok
           ? {
               patchMode: true,
@@ -1367,6 +1580,8 @@ export async function executeGithubApi(params: {
               originalChars: originalText.length,
               patchedChars: patchOutcome.patchedText.length,
               path: putData?.content?.path,
+              branch: effectiveBranch || undefined,
+              branchRedirectedFromMain,
               fileSha: newFileSha,
               commitSha,
               htmlUrl: putData?.content?.html_url || putData?.commit?.html_url,
@@ -1420,7 +1635,7 @@ export async function executeGithubApi(params: {
   if (method === 'PUT' && isContentsEndpoint && preparedBody) {
     try {
       const parsedBody = JSON.parse(preparedBody);
-      if (effectiveBranch && !parsedBody.branch) {
+      if (effectiveBranch && (!parsedBody.branch || branchRedirectedFromMain)) {
         parsedBody.branch = effectiveBranch;
         preparedBody = JSON.stringify(parsedBody);
       }
@@ -1459,7 +1674,7 @@ export async function executeGithubApi(params: {
   }
 
   try {
-    const res = await fetchWithTimeout(
+    let res = await fetchWithTimeout(
       url,
       {
         method,
@@ -1468,6 +1683,51 @@ export async function executeGithubApi(params: {
       },
       timeoutMs
     );
+
+    if (
+      res.status === 404 &&
+      method === 'PUT' &&
+      isContentsEndpoint &&
+      effectiveBranch === SANCTUARY_VAULT_BRANCH
+    ) {
+      const repoMatch = endpoint.match(/^\/?repos\/([^/]+)\/([^/]+)\//i);
+      if (repoMatch) {
+        const ensured = await ensureGithubBranchExists({
+          owner: repoMatch[1],
+          repo: repoMatch[2],
+          branch: SANCTUARY_VAULT_BRANCH,
+          token,
+          timeoutMs,
+        });
+        if (ensured.ok) {
+          // Also re-check SHA on newly created branch before retrying PUT
+          try {
+            const recheckUrl = `${url}${url.includes('?') ? '&' : '?'}ref=${encodeURIComponent(SANCTUARY_VAULT_BRANCH)}`;
+            const recheckRes = await fetchWithTimeout(recheckUrl, { method: 'GET', headers: authHeaders }, timeoutMs);
+            if (recheckRes.ok && preparedBody) {
+              const recheckJson = (await recheckRes.json().catch(() => null)) as { sha?: string } | null;
+              if (recheckJson?.sha) {
+                const parsedRetry = JSON.parse(preparedBody);
+                parsedRetry.sha = recheckJson.sha;
+                parsedRetry.branch = SANCTUARY_VAULT_BRANCH;
+                preparedBody = JSON.stringify(parsedRetry);
+              }
+            }
+          } catch {
+            // ignore
+          }
+          res = await fetchWithTimeout(
+            url,
+            {
+              method,
+              headers: authHeaders,
+              body: preparedBody,
+            },
+            timeoutMs
+          );
+        }
+      }
+    }
 
     const scopesHeader = res.headers.get('x-oauth-scopes') || '';
     const acceptedScopesHeader = res.headers.get('x-accepted-oauth-scopes') || '';
@@ -1558,6 +1818,8 @@ export async function executeGithubApi(params: {
       'x-accepted-oauth-scopes': acceptedScopesHeader,
       fileSha: extractedFileSha,
       commitSha: extractedCommitSha,
+      branch: effectiveBranch || undefined,
+      branchRedirectedFromMain,
       data,
       error: res.ok
         ? undefined

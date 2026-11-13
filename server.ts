@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -593,22 +594,48 @@ async function startServer() {
     return next();
   });
 
-  // GET /api/guy-diary: Reads local ARGON_GUY_DIARY.md ledger
+  const getRuntimeGuyDiaryPath = (): string => {
+    const runtimeDir = path.join(os.tmpdir(), 'argon_sanctuary_runtime');
+    if (!fs.existsSync(runtimeDir)) {
+      fs.mkdirSync(runtimeDir, { recursive: true });
+    }
+    const runtimeFile = path.join(runtimeDir, 'ARGON_GUY_DIARY.md');
+    if (!fs.existsSync(runtimeFile)) {
+      const seedFile = path.join(__dirname, 'ARGON_GUY_DIARY.md');
+      if (fs.existsSync(seedFile)) {
+        fs.copyFileSync(seedFile, runtimeFile);
+      } else {
+        fs.writeFileSync(
+          runtimeFile,
+          [
+            '# 🕵️‍♂️ ARGON\'S GUY DIARY (`hey_lawnmower_man`)',
+            '*"The junk in your trunk" — Private Field Ledger & Internet Doings*',
+            '',
+            '---',
+          ].join('\n'),
+          'utf-8'
+        );
+      }
+    }
+    return runtimeFile;
+  };
+
+  // GET /api/guy-diary: Reads runtime ARGON_GUY_DIARY.md ledger (never mutating tracked main workspace)
   app.get('/api/guy-diary', (_req, res) => {
     try {
-      const diaryPath = path.join(__dirname, 'ARGON_GUY_DIARY.md');
+      const diaryPath = getRuntimeGuyDiaryPath();
       if (fs.existsSync(diaryPath)) {
         const content = fs.readFileSync(diaryPath, 'utf-8');
-        return res.json({ success: true, content });
+        return res.json({ success: true, content, branch: 'sanctuary-vault' });
       }
-      return res.json({ success: true, content: '' });
+      return res.json({ success: true, content: '', branch: 'sanctuary-vault' });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return res.status(500).json({ error: msg });
     }
   });
 
-  // POST /api/guy-diary/append: Appends entry to ARGON_GUY_DIARY.md
+  // POST /api/guy-diary/append: Appends entry to isolated runtime ARGON_GUY_DIARY.md (never dirties tracked main workspace)
   app.post('/api/guy-diary/append', async (req, res) => {
     try {
       const {
@@ -623,25 +650,19 @@ async function startServer() {
         author = 'Argon',
         timestamp,
         weatherLocation,
+        branch = 'sanctuary-vault',
       } = req.body || {};
 
       const finalTargetRepo = target_repo || targetRepo || 'DiscordiaDisco/hey_lawnmower_man';
       const finalCommitReceipt = commit_receipt || commitReceipt || 'Verified locally';
       const finalFieldNote = field_note || fieldNote || 'No notes recorded.';
       const finalAuthor = author || 'Argon';
+      const rawBranch = String(branch || 'sanctuary-vault').trim();
+      const finalBranch =
+        rawBranch.toLowerCase() === 'main' || !rawBranch ? 'sanctuary-vault' : rawBranch;
 
-      const diaryPath = path.join(__dirname, 'ARGON_GUY_DIARY.md');
-      let currentContent = '';
-      if (fs.existsSync(diaryPath)) {
-        currentContent = fs.readFileSync(diaryPath, 'utf-8');
-      } else {
-        currentContent = [
-          '# 🕵️‍♂️ ARGON\'S GUY DIARY (`hey_lawnmower_man`)',
-          '*"The junk in your trunk" — Private Field Ledger & Internet Doings*',
-          '',
-          '---',
-        ].join('\n');
-      }
+      const diaryPath = getRuntimeGuyDiaryPath();
+      const currentContent = fs.readFileSync(diaryPath, 'utf-8');
 
       // Count existing entries to determine next Entry #
       const entryMatches = currentContent.match(/## Entry #(\d+)/g) || [];
@@ -669,7 +690,7 @@ async function startServer() {
         '',
         `## Entry #${entryNumberStr} — ${title}`,
         `- **Timestamp:** ${nowFormatted}${locationStamp}`,
-        `- **Target Repo:** \`${finalTargetRepo}\``,
+        `- **Target Repo:** \`${finalTargetRepo}\` (vault branch: \`${finalBranch}\`)`,
         `- **Commit Receipt:** \`${finalCommitReceipt}\``,
         `- **Payload:** ${payload}`,
         `- **Field Note:** ${finalFieldNote}`,
@@ -684,6 +705,7 @@ async function startServer() {
         entryNumber: entryNumberStr,
         entryBlock,
         fullDiary: updatedContent,
+        branch: finalBranch,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

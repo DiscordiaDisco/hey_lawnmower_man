@@ -28,6 +28,10 @@ import {
   sanitizeGeminiConfig,
   executeGeminiGenerateContent,
   executeGeminiGenerateContentStream,
+  HEY_LAWNMOWER_MAN_REPO,
+  SANCTUARY_VAULT_BRANCH,
+  ensureGithubBranchExists,
+  isHeyLawnmowerManRuntimeStatePath,
 } from '../services/gemini';
 import {
   DEFAULT_ARGON_SYS_PROMPT,
@@ -56,6 +60,10 @@ export {
   sanitizeGeminiConfig,
   executeGeminiGenerateContent,
   executeGeminiGenerateContentStream,
+  HEY_LAWNMOWER_MAN_REPO,
+  SANCTUARY_VAULT_BRANCH,
+  ensureGithubBranchExists,
+  isHeyLawnmowerManRuntimeStatePath,
 };
 
 export const DEFAULT_GIST_ID = '53d05bcdd9b06cb8e2cce4efa838be09';
@@ -268,6 +276,16 @@ export function loadUserPersona(): UserPersona {
   return { ...DEFAULT_HEX_USER_PERSONA };
 }
 
+export function dispatchLocalSyncDirty(reason: string): void {
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('argon-local-sync-dirty', { detail: { reason, at: Date.now() } }));
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export function saveUserPersona(persona: UserPersona): void {
   try {
     if (typeof localStorage !== 'undefined') {
@@ -276,6 +294,7 @@ export function saveUserPersona(persona: UserPersona): void {
   } catch {
     // ignore
   }
+  dispatchLocalSyncDirty('userPersona');
 }
 
 export interface UiBreadcrumb {
@@ -491,6 +510,7 @@ export function saveTicketScratchpad(state: TicketScratchpadState): TicketScratc
   } catch {
     // ignore
   }
+  dispatchLocalSyncDirty('ticketScratchpad');
   return state;
 }
 
@@ -576,6 +596,7 @@ export function saveCreepyShrineState(state: CreepyShrineState): CreepyShrineSta
   } catch {
     // ignore
   }
+  dispatchLocalSyncDirty('creepyShrine');
   return state;
 }
 
@@ -665,6 +686,7 @@ export function saveCurioShelf(curios: CurioItem[]): CurioItem[] {
   } catch {
     // ignore
   }
+  dispatchLocalSyncDirty('curios');
   return curios;
 }
 
@@ -1020,6 +1042,7 @@ export function saveStoredAgentFixRequests(tickets: AgentFixRequestTicket[]): vo
   } catch {
     // ignore
   }
+  dispatchLocalSyncDirty('agentFixRequests');
 }
 
 export type DefaultArgonStickerShortcode =
@@ -1633,7 +1656,7 @@ export const DEFAULT_STAFF_JOBS: StaffJobDescription[] = [
     id: 'job-guy-diary-recon',
     title: 'Guy Diary Recon & Commits',
     prompt:
-      'Execute multi-step reconnaissance via github_api, inspect deployed commits or live web releases, and log the receipt straight into DiscordiaDisco/hey_lawnmower_man/ARGON_GUY_DIARY.md via append_guy_diary with 1-shot upsert on cheap Flash tokens.',
+      'Execute multi-step reconnaissance via github_api, inspect deployed commits or live web releases, and log the receipt straight into ARGON_GUY_DIARY.md on the dedicated sanctuary-vault branch of DiscordiaDisco/hey_lawnmower_man (NEVER main) via append_guy_diary with 1-shot upsert on cheap Flash tokens.',
   },
   {
     id: 'job-github-pages-deploy',
@@ -2348,7 +2371,7 @@ export function buildStaffRoleplaySystemPrompt(
     `1. You are typing directly into your OWN standalone chat bubble (sender: 'staff') as ${agent.name} using standard roleplay formatting: write physical actions in *single-asterisk italics* and spoken dialogue/barks/chitters in "double quotes".`,
     `2. STRICT SPEAKER SEPARATION: Write ONLY ${agent.name}'s own actions and speech! NEVER write dialogue, narration, or reactions for Argon or Hex inside your message bubble. Argon has his own separate message bubble.`,
     `3. NEVER use or repeat a static, pre-scripted, or canned opening line. Every message must be freshly written in the moment.`,
-    `4. REAL TOOL EXECUTION & SURGICAL GITHUB PATCHING: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character! NEVER emit entire 60KB–85KB files in github_api JSON arguments—always use \`search\` on GET to inspect specific sections and \`replacements: [{ find, replace }]\` on PUT/PATCH for instant surgical commits!`,
+    `4. REAL TOOL EXECUTION & SURGICAL GITHUB PATCHING: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character! NEVER emit entire 60KB–85KB files in github_api JSON arguments—always use \`search\` on GET to inspect specific sections and \`replacements: [{ find, replace }]\` on PUT/PATCH for instant surgical commits! CRITICAL BRANCH RULE: NEVER write runtime chat state, diary entries, or sanctuary backups to DiscordiaDisco/hey_lawnmower_man \`main\` branch (it causes Google AI Studio Git merge locks); always target \`branch: "sanctuary-vault"\` or a private Gist.`,
   ];
 
   if (telemetryContext && telemetryContext.trim()) {
@@ -5062,6 +5085,7 @@ export function saveLibrarySpines(spines: Record<string, LibrarySpineBook>): voi
   } catch {
     // ignore
   }
+  dispatchLocalSyncDirty('librarySpines');
 }
 
 export interface SanctuaryBooksVaultPayload {
@@ -8183,6 +8207,7 @@ export interface GuyDiaryEntryResult {
   entryNumber: string;
   entryMarkdown: string;
   fullDiary: string;
+  branch?: string;
   githubSync?: GithubApiExecutionResult | null;
   error?: string;
 }
@@ -8196,19 +8221,21 @@ export const DEFAULT_GUY_DIARY_TEMPLATE = `# 🕵️‍♂️ ARGON'S GUY DIARY 
 /**
  * Appends a reconnaissance, commit receipt, or field telemetry entry straight into ARGON_GUY_DIARY.md.
  * Persists locally (via /api/guy-diary/append & localStorage) and commits live to GitHub
- * (DiscordiaDisco/hey_lawnmower_man/ARGON_GUY_DIARY.md) via 1-shot upsert on Flash tokens.
+ * (DiscordiaDisco/hey_lawnmower_man/ARGON_GUY_DIARY.md on branch `sanctuary-vault`, NEVER `main`)
+ * via 1-shot upsert on Flash tokens.
  */
 export async function appendGuyDiaryEntry(
   params: GuyDiaryEntryInput
 ): Promise<GuyDiaryEntryResult> {
   const title = String(params.title || 'Sanctuary Reconnaissance').trim();
-  const targetRepo = String(params.targetRepo || params.target_repo || 'DiscordiaDisco/hey_lawnmower_man').trim();
+  const targetRepo = String(params.targetRepo || params.target_repo || HEY_LAWNMOWER_MAN_REPO).trim();
   const commitReceipt = String(params.commitReceipt || params.commit_receipt || '1-Shot Upsert verified live').trim();
   const payload = String(params.payload || 'Reconnaissance & field telemetry logged.').trim();
   const fieldNote = String(params.fieldNote || params.field_note || 'No notes recorded.').trim();
   const author = String(params.author || 'Argon').trim();
+  const vaultBranch = SANCTUARY_VAULT_BRANCH;
 
-  // 1. Try server endpoint first
+  // 1. Try server endpoint first (server stores runtime appends outside tracked main workspace)
   try {
     const res = await fetch('/api/guy-diary/append', {
       method: 'POST',
@@ -8222,6 +8249,7 @@ export async function appendGuyDiaryEntry(
         author,
         timestamp: params.timestamp,
         weatherLocation: params.weatherLocation,
+        branch: vaultBranch,
       }),
     });
     if (res.ok) {
@@ -8237,12 +8265,20 @@ export async function appendGuyDiaryEntry(
             : '');
         if (token && token.trim()) {
           try {
+            await ensureGithubBranchExists({
+              owner: 'DiscordiaDisco',
+              repo: 'hey_lawnmower_man',
+              branch: vaultBranch,
+              token: token.trim(),
+            });
             ghResult = await executeGithubApi({
               endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md`,
               method: 'PUT',
+              branch: vaultBranch,
               body: JSON.stringify({
                 message: `chore(diary): Entry #${data.entryNumber} — ${title} [via ${author}]`,
                 content: data.fullDiary,
+                branch: vaultBranch,
               }),
               token: token.trim(),
             });
@@ -8258,6 +8294,7 @@ export async function appendGuyDiaryEntry(
           entryNumber: data.entryNumber,
           entryMarkdown: data.entryBlock,
           fullDiary: data.fullDiary,
+          branch: vaultBranch,
           githubSync: ghResult,
         };
       }
@@ -8298,7 +8335,7 @@ export async function appendGuyDiaryEntry(
     '',
     `## Entry #${entryNumberStr} — ${title}`,
     `- **Timestamp:** ${nowFormatted}${loc}`,
-    `- **Target Repo:** \`${targetRepo}\``,
+    `- **Target Repo:** \`${targetRepo}\` (vault branch: \`${vaultBranch}\`)`,
     `- **Commit Receipt:** \`${commitReceipt}\``,
     `- **Payload:** ${payload}`,
     `- **Field Note:** ${fieldNote}`,
@@ -8320,12 +8357,20 @@ export async function appendGuyDiaryEntry(
       : '');
   if (token && token.trim()) {
     try {
+      await ensureGithubBranchExists({
+        owner: 'DiscordiaDisco',
+        repo: 'hey_lawnmower_man',
+        branch: vaultBranch,
+        token: token.trim(),
+      });
       ghResult = await executeGithubApi({
         endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md`,
         method: 'PUT',
+        branch: vaultBranch,
         body: JSON.stringify({
           message: `chore(diary): Entry #${entryNumberStr} — ${title} [via ${author}]`,
           content: fullDiary,
+          branch: vaultBranch,
         }),
         token: token.trim(),
       });
@@ -8339,8 +8384,139 @@ export async function appendGuyDiaryEntry(
     entryNumber: entryNumberStr,
     entryMarkdown: entryBlock,
     fullDiary,
+    branch: vaultBranch,
     githubSync: ghResult,
   };
+}
+
+export const SANCTUARY_VAULT_SYNC_PATH = 'sanctuary-vault/sanctuary_live_sync.json';
+
+/**
+ * Backs up complete Sanctuary live state exclusively onto the dedicated `sanctuary-vault` branch
+ * of `DiscordiaDisco/hey_lawnmower_man` (auto-creating `sanctuary-vault` if missing).
+ * NEVER commits runtime state to `main`, keeping AI Studio two-way Git sync clean and conflict-free.
+ */
+export async function pushSanctuaryStateToVaultBranch(params: {
+  githubToken: string;
+  payload: SanctuaryLiveSyncPayload;
+  commitMessage?: string;
+}): Promise<{
+  ok: boolean;
+  branch: string;
+  path: string;
+  status?: number;
+  commitSha?: string;
+  error?: string;
+}> {
+  const cleanToken = (params.githubToken || '').trim();
+  if (!cleanToken) {
+    return {
+      ok: false,
+      branch: SANCTUARY_VAULT_BRANCH,
+      path: SANCTUARY_VAULT_SYNC_PATH,
+      error: 'Missing GitHub token',
+    };
+  }
+
+  try {
+    const branchRes = await ensureGithubBranchExists({
+      owner: 'DiscordiaDisco',
+      repo: 'hey_lawnmower_man',
+      branch: SANCTUARY_VAULT_BRANCH,
+      token: cleanToken,
+    });
+    if (!branchRes.ok) {
+      return {
+        ok: false,
+        branch: SANCTUARY_VAULT_BRANCH,
+        path: SANCTUARY_VAULT_SYNC_PATH,
+        error: branchRes.error || 'Could not ensure sanctuary-vault branch',
+      };
+    }
+
+    const message =
+      params.commitMessage ||
+      `chore(sanctuary-vault): Auto-backup Sanctuary state (${params.payload.syncedAtFormatted})`;
+
+    const ghRes = await executeGithubApi({
+      endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/${SANCTUARY_VAULT_SYNC_PATH}`,
+      method: 'PUT',
+      branch: SANCTUARY_VAULT_BRANCH,
+      body: JSON.stringify({
+        message,
+        content: JSON.stringify(params.payload, null, 2),
+        branch: SANCTUARY_VAULT_BRANCH,
+      }),
+      token: cleanToken,
+    });
+
+    return {
+      ok: ghRes.ok,
+      branch: SANCTUARY_VAULT_BRANCH,
+      path: SANCTUARY_VAULT_SYNC_PATH,
+      status: ghRes.status,
+      commitSha: ghRes.commitSha,
+      error: ghRes.error,
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      branch: SANCTUARY_VAULT_BRANCH,
+      path: SANCTUARY_VAULT_SYNC_PATH,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function pullSanctuaryStateFromVaultBranch(params: {
+  githubToken: string;
+}): Promise<{
+  ok: boolean;
+  branch: string;
+  payload?: SanctuaryLiveSyncPayload;
+  error?: string;
+}> {
+  const cleanToken = (params.githubToken || '').trim();
+  if (!cleanToken) {
+    return { ok: false, branch: SANCTUARY_VAULT_BRANCH, error: 'Missing GitHub token' };
+  }
+  try {
+    const ghRes = await executeGithubApi({
+      endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/${SANCTUARY_VAULT_SYNC_PATH}`,
+      method: 'GET',
+      branch: SANCTUARY_VAULT_BRANCH,
+      token: cleanToken,
+    });
+    if (!ghRes.ok) {
+      return {
+        ok: false,
+        branch: SANCTUARY_VAULT_BRANCH,
+        error: ghRes.error || `GitHub GET HTTP ${ghRes.status}`,
+      };
+    }
+    const dataObj = ghRes.data as any;
+    const rawContent =
+      typeof dataObj?.decodedContent === 'string'
+        ? dataObj.decodedContent
+        : typeof dataObj?.content === 'string'
+        ? decodeURIComponent(escape(atob(String(dataObj.content).replace(/\s+/g, ''))))
+        : '';
+    const extracted = extractSanctuaryLiveSyncPayload(rawContent);
+    if (!extracted) {
+      return {
+        ok: false,
+        branch: SANCTUARY_VAULT_BRANCH,
+        error: 'Could not parse sanctuary_live_sync.json from sanctuary-vault branch',
+      };
+    }
+    return { ok: true, branch: SANCTUARY_VAULT_BRANCH, payload: extracted };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      branch: SANCTUARY_VAULT_BRANCH,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export async function syncSanctuaryBooksVaultToGist(
@@ -9114,13 +9290,14 @@ export async function runClientStaffTask(params: {
           entryNumber: diaryRes.entryNumber,
           title,
           targetRepo,
+          branch: diaryRes.branch || SANCTUARY_VAULT_BRANCH,
           commitReceipt,
           githubSynced: Boolean(diaryRes.githubSync?.ok),
           githubStatus: diaryRes.githubSync?.status,
         };
         toolBadges.push({
           tool: 'github_api',
-          label: `🐾🕵️‍♂️ ${agent.name} Logged Guy Diary #${diaryRes.entryNumber}: "${title.slice(0, 22)}"`,
+          label: `🐾🕵️‍♂️ ${agent.name} Logged Guy Diary #${diaryRes.entryNumber} [${diaryRes.branch || SANCTUARY_VAULT_BRANCH}]: "${title.slice(0, 22)}"`,
         });
       } else if (
         fnName === 'compact_lorebook_drawer' ||
@@ -11080,13 +11257,14 @@ export async function runClientChatTurn(params: {
           entryNumber: diaryRes.entryNumber,
           title,
           targetRepo,
+          branch: diaryRes.branch || SANCTUARY_VAULT_BRANCH,
           commitReceipt,
           githubSynced: Boolean(diaryRes.githubSync?.ok),
           githubStatus: diaryRes.githubSync?.status,
         };
         toolBadges.push({
           tool: 'github_api',
-          label: `🕵️‍♂️ Logged Guy Diary #${diaryRes.entryNumber}: "${title.slice(0, 24)}"`,
+          label: `🕵️‍♂️ Logged Guy Diary #${diaryRes.entryNumber} [${diaryRes.branch || SANCTUARY_VAULT_BRANCH}]: "${title.slice(0, 24)}"`,
         });
       } else if (
         fnName === 'compact_lorebook_drawer' ||
@@ -15168,6 +15346,13 @@ export function saveLinkedSyncFileMeta(meta: LinkedSyncFileMeta): void {
   } catch {
     // ignore
   }
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('argon-linked-sync-meta-updated', { detail: meta }));
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export function loadLinkedSyncFileMeta(): LinkedSyncFileMeta | null {
@@ -15188,7 +15373,8 @@ export function loadLinkedSyncFileMeta(): LinkedSyncFileMeta | null {
 
 export async function verifyHandlePermission(
   handle: any,
-  readWrite = true
+  readWrite = true,
+  allowPrompt = true
 ): Promise<boolean> {
   if (!handle) return false;
   const options = { mode: readWrite ? ('readwrite' as const) : ('read' as const) };
@@ -15196,7 +15382,7 @@ export async function verifyHandlePermission(
     if (typeof handle.queryPermission === 'function') {
       const status = await handle.queryPermission(options);
       if (status === 'granted') return true;
-      if (status === 'prompt' && typeof handle.requestPermission === 'function') {
+      if (status === 'prompt' && allowPrompt && typeof handle.requestPermission === 'function') {
         const req = await handle.requestPermission(options);
         return req === 'granted';
       }
@@ -15429,6 +15615,8 @@ export interface SanctuaryLiveSyncPayload {
   curios?: CurioItem[];
   librarySpines?: Record<string, LibrarySpineBook>;
   agentFixRequests?: AgentFixRequestTicket[];
+  ticketScratchpad?: TicketScratchpadState;
+  creepyShrine?: CreepyShrineState;
   userPersona?: UserPersona;
   whiteboardStrokes?: WhiteboardStroke[];
   systemPrompt?: string;
@@ -15447,6 +15635,8 @@ export function compileSanctuaryLiveSyncPayload(params?: {
   curios?: CurioItem[];
   librarySpines?: Record<string, LibrarySpineBook>;
   agentFixRequests?: AgentFixRequestTicket[];
+  ticketScratchpad?: TicketScratchpadState;
+  creepyShrine?: CreepyShrineState;
   userPersona?: UserPersona;
   whiteboardStrokes?: WhiteboardStroke[];
   systemPrompt?: string;
@@ -15489,6 +15679,8 @@ export function compileSanctuaryLiveSyncPayload(params?: {
   const curios = params?.curios || loadCurioShelf();
   const librarySpines = params?.librarySpines || loadLibrarySpines();
   const agentFixRequests = params?.agentFixRequests || loadStoredAgentFixRequests();
+  const ticketScratchpad = params?.ticketScratchpad || loadTicketScratchpad();
+  const creepyShrine = params?.creepyShrine || loadCreepyShrineState();
   const userPersona = params?.userPersona || loadUserPersona();
 
   let systemPrompt = params?.systemPrompt;
@@ -15529,6 +15721,8 @@ export function compileSanctuaryLiveSyncPayload(params?: {
     curios,
     librarySpines,
     agentFixRequests,
+    ticketScratchpad,
+    creepyShrine,
     userPersona,
     whiteboardStrokes: params?.whiteboardStrokes,
     systemPrompt,
@@ -15582,6 +15776,14 @@ export function extractSanctuaryLiveSyncPayload(
     const safeFixRequests = Array.isArray(parsed.agentFixRequests)
       ? parsed.agentFixRequests
       : undefined;
+    const safeTicketScratchpad =
+      parsed.ticketScratchpad && typeof parsed.ticketScratchpad === 'object'
+        ? parsed.ticketScratchpad
+        : undefined;
+    const safeCreepyShrine =
+      parsed.creepyShrine && typeof parsed.creepyShrine === 'object'
+        ? parsed.creepyShrine
+        : undefined;
     const safePersona =
       parsed.userPersona && typeof parsed.userPersona === 'object'
         ? parsed.userPersona
@@ -15603,6 +15805,8 @@ export function extractSanctuaryLiveSyncPayload(
       curios: safeCurios,
       librarySpines: safeLibrarySpines,
       agentFixRequests: safeFixRequests,
+      ticketScratchpad: safeTicketScratchpad,
+      creepyShrine: safeCreepyShrine,
       userPersona: safePersona,
       whiteboardStrokes: safeStrokes,
       systemPrompt: typeof parsed.systemPrompt === 'string' ? parsed.systemPrompt : undefined,
@@ -15674,6 +15878,14 @@ export function extractSanctuaryLiveSyncPayload(
     agentFixRequests: Array.isArray(parsed.agentFixRequests)
       ? parsed.agentFixRequests
       : undefined,
+    ticketScratchpad:
+      parsed.ticketScratchpad && typeof parsed.ticketScratchpad === 'object'
+        ? parsed.ticketScratchpad
+        : undefined,
+    creepyShrine:
+      parsed.creepyShrine && typeof parsed.creepyShrine === 'object'
+        ? parsed.creepyShrine
+        : undefined,
     userPersona:
       parsed.userPersona && typeof parsed.userPersona === 'object'
         ? parsed.userPersona
@@ -15904,44 +16116,67 @@ export async function readSanctuaryLiveSyncFile(
   return null;
 }
 
+export interface AutoLocalSyncDetailedResult {
+  success: boolean;
+  method: 'direct_file' | 'direct_dir' | 'idb_cached';
+  filename: string;
+  bytes: number;
+  lastSyncedFormatted: string;
+  meta: LinkedSyncFileMeta | null;
+}
+
 /**
- * Auto-Sync Hook: Automatically persists live backup state in IndexedDB and,
+ * Detailed Auto-Sync Hook: Automatically persists live backup state in IndexedDB and,
  * if a persistent local phone file or folder handle is active, writes through to
- * sanctuary_live_sync.json on Hex's phone in the background without browser downloads.
+ * sanctuary_live_sync.json on Hex's phone without browser downloads.
  */
-export async function autoWriteThroughLocalSync(
-  partialPayload?: Partial<SanctuaryLiveSyncPayload>
-): Promise<boolean> {
+export async function autoWriteThroughLocalSyncDetailed(
+  partialPayload?: Partial<SanctuaryLiveSyncPayload>,
+  options?: { allowPermissionPrompt?: boolean }
+): Promise<AutoLocalSyncDetailedResult> {
+  const allowPermissionPrompt = options?.allowPermissionPrompt ?? false;
+  const now = Date.now();
+  const lastSyncedFormatted = formatJournalTimestamp(now);
   try {
     const payload = compileSanctuaryLiveSyncPayload(partialPayload);
     const jsonStr = JSON.stringify(payload, null, 2);
+    const bytes = jsonStr.length;
 
     // 1. Always persist to IndexedDB store
     await idbSet(STORAGE_KEYS.SANCTUARY_LIVE_SYNC, payload);
-
-    let writtenDirect = false;
 
     // 2. Try persistent FileSystemFileHandle if linked
     const fileHandle = await getLinkedSyncFileHandle();
     if (fileHandle && typeof (fileHandle as any).createWritable === 'function') {
       try {
-        const hasPerm = await verifyHandlePermission(fileHandle, true);
+        const hasPerm = await verifyHandlePermission(fileHandle, true, allowPermissionPrompt);
         if (hasPerm) {
           const writable = await (fileHandle as any).createWritable();
           await writable.write(jsonStr);
           await writable.close();
-          writtenDirect = true;
 
-          const now = Date.now();
           const meta: LinkedSyncFileMeta = {
             fileName: fileHandle.name || SANCTUARY_LIVE_SYNC_FILENAME,
             lastSyncedAt: now,
-            lastSyncedFormatted: formatJournalTimestamp(now),
+            lastSyncedFormatted,
             status: 'connected',
-            byteSize: jsonStr.length,
+            byteSize: bytes,
             handleType: 'file',
           };
           saveLinkedSyncFileMeta(meta);
+          return {
+            success: true,
+            method: 'direct_file',
+            filename: meta.fileName,
+            bytes,
+            lastSyncedFormatted,
+            meta,
+          };
+        } else {
+          const cur = loadLinkedSyncFileMeta();
+          if (cur && cur.status !== 'permission_needed') {
+            saveLinkedSyncFileMeta({ ...cur, status: 'permission_needed' });
+          }
         }
       } catch (fileErr) {
         console.warn('[LocalPhoneSync] autoWriteThrough to fileHandle failed:', fileErr);
@@ -15949,42 +16184,78 @@ export async function autoWriteThroughLocalSync(
     }
 
     // 3. Try phone directory handle if not written to fileHandle
-    if (!writtenDirect) {
-      const dirHandle = await getPhoneDirectoryHandle();
-      if (dirHandle && typeof (dirHandle as any).getFileHandle === 'function') {
-        try {
-          const hasPerm = await verifyHandlePermission(dirHandle, true);
-          if (hasPerm) {
-            const targetFile = await dirHandle.getFileHandle(SANCTUARY_LIVE_SYNC_FILENAME, {
-              create: true,
-            });
-            const writable = await (targetFile as any).createWritable();
-            await writable.write(jsonStr);
-            await writable.close();
-            writtenDirect = true;
+    const dirHandle = await getPhoneDirectoryHandle();
+    if (dirHandle && typeof (dirHandle as any).getFileHandle === 'function') {
+      try {
+        const hasPerm = await verifyHandlePermission(dirHandle, true, allowPermissionPrompt);
+        if (hasPerm) {
+          const targetFile = await dirHandle.getFileHandle(SANCTUARY_LIVE_SYNC_FILENAME, {
+            create: true,
+          });
+          const writable = await (targetFile as any).createWritable();
+          await writable.write(jsonStr);
+          await writable.close();
 
-            const now = Date.now();
-            const meta: LinkedSyncFileMeta = {
-              fileName: `${dirHandle.name}/${SANCTUARY_LIVE_SYNC_FILENAME}`,
-              lastSyncedAt: now,
-              lastSyncedFormatted: formatJournalTimestamp(now),
-              status: 'connected',
-              byteSize: jsonStr.length,
-              handleType: 'directory',
-            };
-            saveLinkedSyncFileMeta(meta);
+          const meta: LinkedSyncFileMeta = {
+            fileName: `${dirHandle.name}/${SANCTUARY_LIVE_SYNC_FILENAME}`,
+            lastSyncedAt: now,
+            lastSyncedFormatted,
+            status: 'connected',
+            byteSize: bytes,
+            handleType: 'directory',
+          };
+          saveLinkedSyncFileMeta(meta);
+          return {
+            success: true,
+            method: 'direct_dir',
+            filename: meta.fileName,
+            bytes,
+            lastSyncedFormatted,
+            meta,
+          };
+        } else {
+          const cur = loadLinkedSyncFileMeta();
+          if (cur && cur.status !== 'permission_needed') {
+            saveLinkedSyncFileMeta({ ...cur, status: 'permission_needed' });
           }
-        } catch (dirErr) {
-          console.warn('[LocalPhoneSync] autoWriteThrough to dirHandle failed:', dirErr);
         }
+      } catch (dirErr) {
+        console.warn('[LocalPhoneSync] autoWriteThrough to dirHandle failed:', dirErr);
       }
     }
 
-    return true;
+    return {
+      success: true,
+      method: 'idb_cached',
+      filename: SANCTUARY_LIVE_SYNC_FILENAME,
+      bytes,
+      lastSyncedFormatted,
+      meta: loadLinkedSyncFileMeta(),
+    };
   } catch (err) {
-    console.warn('[LocalPhoneSync] autoWriteThroughLocalSync error:', err);
-    return false;
+    console.warn('[LocalPhoneSync] autoWriteThroughLocalSyncDetailed error:', err);
+    return {
+      success: false,
+      method: 'idb_cached',
+      filename: SANCTUARY_LIVE_SYNC_FILENAME,
+      bytes: 0,
+      lastSyncedFormatted,
+      meta: loadLinkedSyncFileMeta(),
+    };
   }
+}
+
+/**
+ * Auto-Sync Hook: Automatically persists live backup state in IndexedDB and,
+ * if a persistent local phone file or folder handle is active, writes through to
+ * sanctuary_live_sync.json on Hex's phone in the background without browser downloads.
+ */
+export async function autoWriteThroughLocalSync(
+  partialPayload?: Partial<SanctuaryLiveSyncPayload>,
+  options?: { allowPermissionPrompt?: boolean }
+): Promise<boolean> {
+  const res = await autoWriteThroughLocalSyncDetailed(partialPayload, options);
+  return res.success;
 }
 
 /**

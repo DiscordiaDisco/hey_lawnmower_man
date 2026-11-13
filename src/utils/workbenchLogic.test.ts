@@ -3334,3 +3334,170 @@ test('Multi-round tool loop ceiling (6 rounds), compact tool receipt memory, and
     globalThis.fetch = origFetch;
   }
 });
+
+test('True Auto Phone Sync & hey_lawnmower_man sanctuary-vault Branch Protection', async () => {
+  const {
+    verifyHandlePermission,
+    autoWriteThroughLocalSyncDetailed,
+    compileSanctuaryLiveSyncPayload,
+    extractSanctuaryLiveSyncPayload,
+    pushSanctuaryStateToVaultBranch,
+    SANCTUARY_VAULT_BRANCH,
+    isHeyLawnmowerManRuntimeStatePath,
+  } = await import('./workbenchLogic.js');
+  const { executeGithubApi } = await import('../services/gemini.js');
+
+  // 1. verifyHandlePermission respects allowPrompt = false so background timers never throw/prompt
+  let promptCalls = 0;
+  const mockPromptHandle = {
+    queryPermission: async () => 'prompt',
+    requestPermission: async () => {
+      promptCalls++;
+      return 'granted';
+    },
+  };
+  const bgPerm = await verifyHandlePermission(mockPromptHandle, true, false);
+  assert.equal(bgPerm, false, 'Background check must not call requestPermission when allowPrompt=false');
+  assert.equal(promptCalls, 0);
+
+  const fgPerm = await verifyHandlePermission(mockPromptHandle, true, true);
+  assert.equal(fgPerm, true, 'Clear Chat / user-gesture check may call requestPermission when allowPrompt=true');
+  assert.equal(promptCalls, 1);
+
+  // 2. compileSanctuaryLiveSyncPayload & extractSanctuaryLiveSyncPayload include ticketScratchpad & creepyShrine
+  const compiled = compileSanctuaryLiveSyncPayload({
+    ticketScratchpad: {
+      title: 'Sync bug fix',
+      items: [
+        {
+          id: 'item-1',
+          text: 'Debounced phone sync & sanctuary-vault guard',
+          author: 'hex',
+          timestamp: 123456,
+        },
+      ],
+      hexDone: true,
+      argonDone: false,
+      priority: 'urgent',
+      via: 'direct',
+      lastUpdated: 123456,
+    },
+  });
+  assert.equal(compiled.ticketScratchpad?.title, 'Sync bug fix');
+  const rehydrated = extractSanctuaryLiveSyncPayload(JSON.stringify(compiled));
+  assert.ok(rehydrated);
+  assert.equal(rehydrated?.ticketScratchpad?.title, 'Sync bug fix');
+
+  // 3. autoWriteThroughLocalSyncDetailed returns structured metadata
+  const detailedRes = await autoWriteThroughLocalSyncDetailed(compiled, { allowPermissionPrompt: false });
+  assert.equal(detailedRes.success, true);
+  assert.ok(detailedRes.bytes > 0);
+  assert.ok(detailedRes.lastSyncedFormatted.length > 0);
+
+  // 4. isHeyLawnmowerManRuntimeStatePath catches diary & live state but allows code edits
+  assert.equal(
+    isHeyLawnmowerManRuntimeStatePath('/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md'),
+    true
+  );
+  assert.equal(
+    isHeyLawnmowerManRuntimeStatePath('/repos/DiscordiaDisco/hey_lawnmower_man/contents/sanctuary-vault/sanctuary_live_sync.json'),
+    true
+  );
+  assert.equal(
+    isHeyLawnmowerManRuntimeStatePath('/repos/DiscordiaDisco/hey_lawnmower_man/contents/src/App.tsx'),
+    false
+  );
+
+  // 5. executeGithubApi auto-redirects live state PUTs from `main` to `sanctuary-vault` and auto-creates branch if 404
+  const origFetch = globalThis.fetch;
+  const ghCalls: Array<{ url: string; method: string; body?: any }> = [];
+  let branchCreated = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    const method = (init?.method || 'GET').toUpperCase();
+    const parsedBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+    ghCalls.push({ url: urlStr, method, body: parsedBody });
+
+    // Branch ref lookup
+    if (method === 'GET' && urlStr.includes('/git/ref/heads/sanctuary-vault')) {
+      if (!branchCreated) {
+        return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ object: { sha: 'vault_branch_sha_111' } }), { status: 200 });
+    }
+    if (method === 'GET' && urlStr.endsWith('/repos/DiscordiaDisco/hey_lawnmower_man')) {
+      return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
+    }
+    if (method === 'GET' && urlStr.includes('/git/ref/heads/main')) {
+      return new Response(JSON.stringify({ object: { sha: 'main_head_sha_000' } }), { status: 200 });
+    }
+    if (method === 'POST' && urlStr.includes('/git/refs')) {
+      branchCreated = true;
+      return new Response(JSON.stringify({ ref: 'refs/heads/sanctuary-vault', object: { sha: 'main_head_sha_000' } }), { status: 201 });
+    }
+
+    // File GET on ?ref=sanctuary-vault
+    if (method === 'GET' && urlStr.includes('/contents/')) {
+      if (!branchCreated) {
+        return new Response(JSON.stringify({ message: 'No commit found for the ref sanctuary-vault' }), { status: 404 });
+      }
+      return new Response(JSON.stringify({ message: 'File does not exist yet' }), { status: 404 });
+    }
+
+    // File PUT on sanctuary-vault
+    if (method === 'PUT' && urlStr.includes('/contents/')) {
+      assert.equal(parsedBody?.branch, SANCTUARY_VAULT_BRANCH, 'PUT must NEVER target main!');
+      if (!branchCreated) {
+        return new Response(
+          JSON.stringify({ message: 'Branch sanctuary-vault not found' }),
+          { status: 404, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          content: { sha: 'vault_file_sha_222' },
+          commit: { sha: 'vault_commit_sha_333' },
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
+    return new Response(JSON.stringify({ message: 'Unexpected call' }), { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    // Explicit branch: "main" attempt on ARGON_GUY_DIARY.md gets forcefully redirected to `sanctuary-vault`
+    const diaryPutRes = await executeGithubApi({
+      endpoint: '/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md',
+      method: 'PUT',
+      branch: 'main',
+      body: JSON.stringify({
+        message: 'chore(diary): Entry #010',
+        content: '# Diary updated',
+        branch: 'main',
+      }),
+      token: 'ghp_test_token',
+    });
+
+    assert.equal(diaryPutRes.ok, true);
+    assert.equal(diaryPutRes.branch, SANCTUARY_VAULT_BRANCH);
+    assert.equal(diaryPutRes.branchRedirectedFromMain, true);
+    assert.equal(branchCreated, true, 'sanctuary-vault branch should be auto-created from main HEAD');
+
+    // pushSanctuaryStateToVaultBranch commits exclusively to sanctuary-vault/sanctuary_live_sync.json on sanctuary-vault
+    const vaultBackupRes = await pushSanctuaryStateToVaultBranch({
+      githubToken: 'ghp_test_token',
+      payload: compiled,
+    });
+    assert.equal(vaultBackupRes.ok, true);
+    assert.equal(vaultBackupRes.branch, SANCTUARY_VAULT_BRANCH);
+    assert.equal(vaultBackupRes.path, 'sanctuary-vault/sanctuary_live_sync.json');
+
+    const anyMainPut = ghCalls.some((c) => c.method === 'PUT' && c.body?.branch === 'main');
+    assert.equal(anyMainPut, false, 'NO PUT commit may ever target main on hey_lawnmower_man');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+

@@ -2155,7 +2155,7 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
                 <span>6. Local Phone Sync (Persistent File Handle)</span>
               </h3>
               <p className="text-xs text-[#e6a8b5]/85 font-mono break-words">
-                Hex links a persistent sync file on her phone once. Argon reads &amp; writes live in the background without browser download popups.
+                Hex links a persistent sync file on her phone once. Changes to Books, Vault, Drawers, Persona, Curios &amp; Tickets auto-sync (~1.2s debounce) and flush automatically before Clear Chat. Cloud backups use private Gist or <code className="text-[#D4AF37]">sanctuary-vault</code> (never <code className="text-[#D4AF37]">main</code>).
               </p>
             </div>
           </div>

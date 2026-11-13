@@ -193,6 +193,14 @@ import {
   normalizeContentPartsSpacing,
   buildLiveTurnSystemContextBlock,
   getDynamicTriggeredLorebookDrawersBlock,
+  MAX_ARGON_TOOL_LOOPS,
+  githubApiDeclaration,
+  executeGithubApi,
+  applySurgicalFileReplacements,
+  encodeGithubUtf8Base64,
+  summarizeToolResultForHistory,
+  recordSessionModelToolReceipt,
+  lookupSessionModelToolReceipt,
 } from './workbenchLogic';
 
 test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => {
@@ -3167,4 +3175,162 @@ test('Dynamic context injection is isolated into <live_turn_system_context> and 
   assert.ok(openAiPayload[0].content.includes('[CURRENT ROOM & LIVE UI STATE'));
   assert.equal(openAiPayload[1].role, 'user');
   assert.equal(openAiPayload[1].content, 'im getting really nervous.');
+});
+
+test('Multi-round tool loop ceiling (6 rounds), compact tool receipt memory, and surgical github_api file patching work end-to-end', async () => {
+  // 1. Verify MAX_ARGON_TOOL_LOOPS is restored to 6 (fixing the 1-round regression)
+  assert.equal(MAX_ARGON_TOOL_LOOPS, 6);
+
+  // 2. Verify githubApiDeclaration exposes replacements, commit_message, branch, and search
+  const ghProps = (githubApiDeclaration.parameters as any)?.properties || {};
+  assert.ok(ghProps.replacements, 'github_api must expose replacements array');
+  assert.ok(ghProps.commit_message, 'github_api must expose commit_message');
+  assert.ok(ghProps.branch, 'github_api must expose branch');
+  assert.ok(ghProps.search, 'github_api must expose search');
+
+  // 3. Verify applySurgicalFileReplacements preserves JS `$` tokens (`$&`, `$1`, `$$`), handles CRLF, and aborts safely on unmatched find
+  const largeJsSource = [
+    '// aetherjs.js header\r\n',
+    'const priceLabel = "$100";\r\n',
+    'function formatRegex(s) { return s.replace(/(foo)/g, "$1-$&"); }\r\n',
+    'const FAQ_VERSION = "1.0.0";\r\n',
+    '/* padding */ ' + 'x'.repeat(70000),
+  ].join('');
+
+  const patchRes = applySurgicalFileReplacements(largeJsSource, [
+    {
+      find: 'const FAQ_VERSION = "1.0.0";\n',
+      replace: 'const FAQ_VERSION = "2.0.0";\nconst PATCH_STAMP = "$& literal $1 $$";\n',
+    },
+  ]);
+  assert.equal(patchRes.ok, true);
+  assert.equal(patchRes.replacementsApplied, 1);
+  assert.ok(patchRes.patchedText.includes('const FAQ_VERSION = "2.0.0";'));
+  // Ensure JS `$&`, `$1`, `$$` in replacement text were NOT mangled by String.prototype.replace!
+  assert.ok(patchRes.patchedText.includes('const PATCH_STAMP = "$& literal $1 $$";'));
+
+  const failedPatch = applySurgicalFileReplacements(largeJsSource, [
+    { find: 'NON_EXISTENT_SNIPPET_XYZ', replace: 'new' },
+  ]);
+  assert.equal(failedPatch.ok, false);
+  assert.equal(failedPatch.unmatchedDetails.length, 1);
+
+  // 4. End-to-end mock fetch test for executeGithubApi GET with `search` on 75KB HTML file + surgical PUT `replacements`
+  const origFetch = globalThis.fetch;
+  const bigHtml =
+    '<!DOCTYPE html><html><body>' +
+    '<div class="filler">' +
+    'A'.repeat(72000) +
+    '</div>' +
+    '<section id="faq-target"><h2>Old FAQ Heading</h2><p>Answer v1</p></section>' +
+    '</body></html>';
+  const callsLog: Array<{ url: string; method: string; body?: any }> = [];
+
+  globalThis.fetch = (async (input: any, init?: RequestInit) => {
+    const url = String(input);
+    const method = String(init?.method || 'GET').toUpperCase();
+    const parsedBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+    callsLog.push({ url, method, body: parsedBody });
+
+    if (method === 'GET') {
+      return new Response(
+        JSON.stringify({
+          name: 'index.html',
+          path: 'linkin-faq/index.html',
+          sha: 'sha_before_1234567890',
+          size: bigHtml.length,
+          encoding: 'base64',
+          content: encodeGithubUtf8Base64(bigHtml),
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'x-oauth-scopes': 'repo, gist',
+          },
+        }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        content: {
+          path: 'linkin-faq/index.html',
+          sha: 'sha_after_9876543210',
+          html_url: 'https://github.com/DiscordiaDisco/repo/blob/main/linkin-faq/index.html',
+        },
+        commit: {
+          sha: 'commit_abcdef123456',
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-oauth-scopes': 'repo, gist',
+        },
+      }
+    );
+  }) as typeof fetch;
+
+  try {
+    // 4a. GET with `search` returns compact excerpt + SHA instead of 96KB raw base64
+    const searchRes = await executeGithubApi({
+      endpoint: '/repos/DiscordiaDisco/repo/contents/linkin-faq/index.html',
+      method: 'GET',
+      search: 'Old FAQ Heading',
+      token: 'ghp_test_token',
+    });
+    assert.equal(searchRes.ok, true);
+    assert.equal(searchRes.fileSha, 'sha_before_1234567890');
+    const searchData = searchRes.data as any;
+    assert.equal(searchData.content, undefined, 'Raw base64 content must be stripped');
+    assert.equal(searchData.searchMatches.length, 1);
+    assert.ok(searchData.searchMatches[0].excerpt.includes('Old FAQ Heading'));
+
+    // 4b. Surgical `replacements` fetches file + SHA, patches in memory, and commits via PUT with 1-shot SHA
+    const surgicalPut = await executeGithubApi({
+      endpoint: '/repos/DiscordiaDisco/repo/contents/linkin-faq/index.html',
+      method: 'PATCH',
+      token: 'ghp_test_token',
+      commit_message: 'fix: update FAQ heading surgically',
+      replacements: [
+        {
+          find: '<h2>Old FAQ Heading</h2><p>Answer v1</p>',
+          replace: '<h2>Updated FAQ Heading</h2><p>Answer v2</p>',
+        },
+      ],
+    });
+    assert.equal(surgicalPut.ok, true);
+    assert.equal(surgicalPut.patchMode, true);
+    assert.equal(surgicalPut.replacementsApplied, 1);
+    assert.equal(surgicalPut.fileSha, 'sha_after_9876543210');
+    assert.equal(surgicalPut.commitSha, 'commit_abcdef123456');
+
+    const putCall = callsLog.find((c) => c.method === 'PUT');
+    assert.ok(putCall, 'Expected surgical mode to issue a PUT commit');
+    assert.equal(putCall!.body.sha, 'sha_before_1234567890');
+    const committedHtml = Buffer.from(putCall!.body.content, 'base64').toString('utf-8');
+    assert.ok(committedHtml.includes('<h2>Updated FAQ Heading</h2><p>Answer v2</p>'));
+    assert.equal(committedHtml.includes('Old FAQ Heading'), false);
+
+    // 5. Verify summarizeToolResultForHistory & session receipt cache preserve SHA + status compactly
+    const receipt = summarizeToolResultForHistory(
+      'github_api',
+      { endpoint: '/repos/DiscordiaDisco/repo/contents/linkin-faq/index.html', method: 'PUT' },
+      surgicalPut as unknown as Record<string, unknown>
+    );
+    assert.ok(receipt.includes('SURGICAL PATCH: 1 replacement(s)'));
+    assert.ok(receipt.includes('fileSha=sha_after_98'));
+    assert.ok(receipt.includes('commitSha=commit_abcde'));
+    assert.ok(receipt.length < 700, 'History tool receipt must remain compact');
+
+    recordSessionModelToolReceipt('*I tap the key.* "Patched index.html for you."', receipt);
+    assert.equal(
+      lookupSessionModelToolReceipt('*I tap the key.* "Patched index.html for you."'),
+      receipt
+    );
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });

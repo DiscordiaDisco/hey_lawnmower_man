@@ -16,6 +16,11 @@ import {
   manageAgentTriggersDeclaration,
   executeGithubApi,
   GithubApiExecutionResult,
+  GithubFileReplacement,
+  decodeGithubBase64Utf8,
+  encodeGithubUtf8Base64,
+  applySurgicalFileReplacements,
+  extractLargeFileSearchSnippets,
   ensureBase64RepoContent,
   isGemini3Or4Model,
   normalizeThinkingLevel,
@@ -39,6 +44,11 @@ export {
   manageAgentTriggersDeclaration,
   executeGithubApi,
   type GithubApiExecutionResult,
+  type GithubFileReplacement,
+  decodeGithubBase64Utf8,
+  encodeGithubUtf8Base64,
+  applySurgicalFileReplacements,
+  extractLargeFileSearchSnippets,
   ensureBase64RepoContent,
   isGemini3Or4Model,
   normalizeThinkingLevel,
@@ -2338,7 +2348,7 @@ export function buildStaffRoleplaySystemPrompt(
     `1. You are typing directly into your OWN standalone chat bubble (sender: 'staff') as ${agent.name} using standard roleplay formatting: write physical actions in *single-asterisk italics* and spoken dialogue/barks/chitters in "double quotes".`,
     `2. STRICT SPEAKER SEPARATION: Write ONLY ${agent.name}'s own actions and speech! NEVER write dialogue, narration, or reactions for Argon or Hex inside your message bubble. Argon has his own separate message bubble.`,
     `3. NEVER use or repeat a static, pre-scripted, or canned opening line. Every message must be freshly written in the moment.`,
-    `4. REAL TOOL EXECUTION: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api with 1-shot upsert), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character!`,
+    `4. REAL TOOL EXECUTION & SURGICAL GITHUB PATCHING: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character! NEVER emit entire 60KB–85KB files in github_api JSON arguments—always use \`search\` on GET to inspect specific sections and \`replacements: [{ find, replace }]\` on PUT/PATCH for instant surgical commits!`,
   ];
 
   if (telemetryContext && telemetryContext.trim()) {
@@ -2426,7 +2436,7 @@ export function buildHiddenAvatarAndStaffContext(params: {
 - Zero Turn-1 Status Speeches: Never recite tool inventories, capability announcements, or status speeches. Call the required tool directly or talk to Hex.
 - Anti-Panic-Fix: When code or prompts fail, isolate the failing piece and output only a 1-3 line diagnosis followed by the single corrected line or box.
 - Coding Agent Queue: Call submit_agent_fix_request(action: "create" | "edit" | "remove", title, details, priority, via: "direct" | "haiku", ticketId) for bug and feature tickets immediately without preamble or asking for permission.
-- GitHub REST API: Call github_api(endpoint, method, body) to manage repositories, pages, CNAMEs, and files with 1-shot upsert.]`,
+- GitHub REST API & Surgical Patching: Call github_api(endpoint, method, body, replacements, commit_message, branch, search) across automatic multi-step rounds (GET -> PUT/PATCH -> verify). NEVER emit full 60KB–85KB files (e.g. index.html, aetherjs.js) inside JSON tool arguments! Always pass surgical \`replacements: [{ find: "exact old snippet", replace: "new snippet" }]\` (and use \`search: "keyword"\` on GET for large files) so commits apply in <100ms via 1-shot SHA upsert.]`,
     `[MULTIMODAL ATTACHMENT SYSTEM ONLINE: Native multimodal perception to listen to audio files (.mp3, .wav, .ogg, .m4a, .aac, .webm), read attached PDF documents, analyze attached code/data files (.json, .csv, .md, .txt), and inspect attached images via Gemini native inlineData.]`
   );
 
@@ -8928,8 +8938,23 @@ export async function runClientStaffTask(params: {
         });
       } else if (fnName === 'github_api') {
         const endpoint = String(args.endpoint || '/user').trim();
-        const method = String(args.method || 'GET').trim().toUpperCase();
-        const body = args.body ? (typeof args.body === 'string' ? args.body : JSON.stringify(args.body)) : undefined;
+        const replacements = Array.isArray(args.replacements)
+          ? (args.replacements as GithubFileReplacement[])
+          : undefined;
+        const method = String(
+          args.method || (replacements && replacements.length > 0 ? 'PUT' : 'GET')
+        )
+          .trim()
+          .toUpperCase();
+        const body = args.body
+          ? typeof args.body === 'string'
+            ? args.body
+            : JSON.stringify(args.body)
+          : undefined;
+        const commitMessage =
+          typeof args.commit_message === 'string' ? args.commit_message : undefined;
+        const branch = typeof args.branch === 'string' ? args.branch : undefined;
+        const search = typeof args.search === 'string' ? args.search : undefined;
         const effectiveToken =
           githubToken ||
           (typeof localStorage !== 'undefined'
@@ -8942,6 +8967,10 @@ export async function runClientStaffTask(params: {
           method,
           body,
           token: effectiveToken,
+          replacements,
+          commit_message: commitMessage,
+          branch,
+          search,
         });
         toolResult = {
           status: ghRes.status,
@@ -8953,13 +8982,22 @@ export async function runClientStaffTask(params: {
           acceptedScopes: ghRes.acceptedScopes,
           'x-oauth-scopes': ghRes['x-oauth-scopes'],
           'x-accepted-oauth-scopes': ghRes['x-accepted-oauth-scopes'],
+          patchMode: ghRes.patchMode,
+          replacementsApplied: ghRes.replacementsApplied,
+          originalChars: ghRes.originalChars,
+          patchedChars: ghRes.patchedChars,
+          fileSha: ghRes.fileSha,
+          commitSha: ghRes.commitSha,
           data: ghRes.data,
           error: ghRes.error,
         };
         const scopesSummary = ghRes.scopes.length > 0 ? ` [Scopes: ${ghRes.scopes.join(', ')}]` : '';
+        const patchTag = ghRes.patchMode
+          ? ` [Patch: ${ghRes.replacementsApplied ?? 0} edit(s)]`
+          : '';
         toolBadges.push({
           tool: 'github_api',
-          label: `🐾🐙 ${agent.name} GitHub API ${method} ${endpoint} (${ghRes.status || 'Err'})${scopesSummary}`,
+          label: `🐾🐙 ${agent.name} GitHub API ${ghRes.method} ${endpoint} (${ghRes.status || 'Err'})${patchTag}${scopesSummary}`,
         });
       } else if (fnName === 'list_vault_media') {
         const category = typeof args.category === 'string' ? args.category : 'all';
@@ -9458,6 +9496,108 @@ export function buildLiveTurnSystemContextBlock(params: {
   ].join('\n');
 }
 
+export const MAX_ARGON_TOOL_LOOPS = 6;
+export const DEFAULT_TOOL_LOOP_TIMEOUT_MS = 120_000;
+
+const sessionModelTurnToolReceipts = new Map<string, string>();
+
+export function recordSessionModelToolReceipt(modelText: string, receiptSummary: string): void {
+  const key = (modelText || '').trim().slice(0, 180);
+  if (!key || !receiptSummary.trim()) return;
+  if (sessionModelTurnToolReceipts.size >= 60) {
+    const oldestKey = sessionModelTurnToolReceipts.keys().next().value;
+    if (oldestKey !== undefined) {
+      sessionModelTurnToolReceipts.delete(oldestKey);
+    }
+  }
+  sessionModelTurnToolReceipts.set(key, receiptSummary.trim());
+}
+
+export function lookupSessionModelToolReceipt(modelText: string): string | undefined {
+  const key = (modelText || '').trim().slice(0, 180);
+  if (!key) return undefined;
+  return sessionModelTurnToolReceipts.get(key);
+}
+
+/**
+ * Produces a compact, deterministic ground-truth summary of a tool execution result
+ * (preserving HTTP status, file SHA, commit SHA, applied patches, and a concise content snippet)
+ * so Argon never wakes up blind or hallucinates file state on subsequent turns.
+ */
+export function summarizeToolResultForHistory(
+  fnName: string,
+  args: Record<string, unknown>,
+  toolResult: Record<string, unknown>
+): string {
+  if (fnName === 'github_api') {
+    const method = String(toolResult.method || args.method || 'GET').toUpperCase();
+    const endpoint = String(toolResult.endpoint || args.endpoint || '');
+    const status = toolResult.status ?? 'Err';
+    const ok = Boolean(toolResult.ok);
+    const dataObj =
+      toolResult.data && typeof toolResult.data === 'object' && !Array.isArray(toolResult.data)
+        ? (toolResult.data as Record<string, unknown>)
+        : null;
+    const fileSha = String(
+      toolResult.fileSha ||
+        dataObj?.fileSha ||
+        dataObj?.sha ||
+        (dataObj?.content as any)?.sha ||
+        ''
+    ).trim();
+    const commitSha = String(
+      toolResult.commitSha || dataObj?.commitSha || (dataObj?.commit as any)?.sha || ''
+    ).trim();
+    const patchNote = toolResult.patchMode
+      ? ` [SURGICAL PATCH: ${toolResult.replacementsApplied ?? 0} replacement(s), ${toolResult.originalChars ?? '?'}->${toolResult.patchedChars ?? '?'} chars]`
+      : '';
+    const shaNote = [
+      fileSha ? `fileSha=${fileSha.slice(0, 12)}` : '',
+      commitSha ? `commitSha=${commitSha.slice(0, 12)}` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    let snippet = '';
+    if (!ok && toolResult.error) {
+      snippet = `Error: ${String(toolResult.error).slice(0, 260)}`;
+    } else if (dataObj) {
+      if (typeof dataObj.decodedContent === 'string') {
+        snippet = `Preview (${dataObj.totalChars ?? dataObj.decodedContent.length} chars): ${dataObj.decodedContent.slice(0, 360).replace(/\s+/g, ' ')}`;
+      } else if (typeof dataObj.decodedContentPreview === 'string') {
+        snippet = `Preview (${dataObj.totalChars ?? '?'} chars, truncated): ${dataObj.decodedContentPreview.slice(0, 360).replace(/\s+/g, ' ')}`;
+      } else if (Array.isArray(dataObj.searchMatches)) {
+        snippet = `Search "${dataObj.searchQuery || ''}" (${dataObj.searchMatches.length} matches): ${JSON.stringify(dataObj.searchMatches[0] || {}).slice(0, 340)}`;
+      } else {
+        snippet = JSON.stringify(dataObj).slice(0, 360);
+      }
+    } else if (Array.isArray(toolResult.data)) {
+      snippet = `Array(${toolResult.data.length}): ${JSON.stringify(toolResult.data.slice(0, 3)).slice(0, 320)}`;
+    }
+
+    return `- github_api ${method} ${endpoint} -> HTTP ${status} (${ok ? 'OK' : 'FAIL'})${patchNote}${shaNote ? ` [${shaNote}]` : ''}${snippet ? ` | ${snippet}` : ''}`;
+  }
+
+  if (fnName === 'read_drawer') {
+    const filename = String(toolResult.filename || args.filename || '');
+    if (toolResult.error) return `- read_drawer("${filename}") -> ERROR: ${String(toolResult.error)}`;
+    const content = String(toolResult.content || '');
+    return `- read_drawer("${filename}") -> ${content.length} chars | Preview: ${content.slice(0, 260).replace(/\s+/g, ' ')}`;
+  }
+
+  if (
+    fnName === 'write_drawer' ||
+    fnName === 'delete_drawer' ||
+    fnName === 'compact_lorebook_drawer'
+  ) {
+    const filename = String(toolResult.filename || args.filename || '');
+    return `- ${fnName}("${filename}") -> status=${String(toolResult.status || 'ok')}, chars=${String(toolResult.charCount ?? '')}`;
+  }
+
+  const compactJson = JSON.stringify(toolResult || {}).slice(0, 340);
+  return `- ${fnName} -> ${compactJson}`;
+}
+
 export async function runClientChatTurn(params: {
   model?: string;
   systemPrompt: string;
@@ -9465,6 +9605,7 @@ export async function runClientChatTurn(params: {
     role: 'user' | 'model';
     text: string;
     telemetryHeader?: string;
+    toolResultsSummary?: string;
     images?: Array<{
       mimeType: string;
       data: string;
@@ -9521,6 +9662,8 @@ export async function runClientChatTurn(params: {
   thinkingBudget?: number;
   thinkingLevel?: string | number;
   userTimeZone?: string;
+  maxToolLoops?: number;
+  toolLoopTimeoutMs?: number;
 }) {
   const {
     systemPrompt,
@@ -9636,6 +9779,17 @@ export async function runClientChatTurn(params: {
       parts.push({
         text: '[Previous voice audio clip omitted to save tokens]\n\n',
       });
+    }
+    // Preserve compact ground-truth tool execution receipts on Argon's historical turns so he never wakes up blind
+    if (turn.role === 'model') {
+      const persistedReceipt =
+        (typeof turn.toolResultsSummary === 'string' && turn.toolResultsSummary.trim()) ||
+        lookupSessionModelToolReceipt(turn.text || '');
+      if (persistedReceipt) {
+        parts.push({
+          text: `[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:\n${persistedReceipt}\n\n`,
+        });
+      }
     }
     // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
     const combinedText =
@@ -9990,14 +10144,29 @@ export async function runClientChatTurn(params: {
 
   let response = await callGenerate(contents);
   let loopCount = 0;
-  const maxToolLoops = 1;
+  const maxToolLoops = Math.min(
+    Math.max(1, params.maxToolLoops ?? MAX_ARGON_TOOL_LOOPS),
+    10
+  );
+  const toolLoopTimeoutMs = Math.max(5_000, params.toolLoopTimeoutMs ?? DEFAULT_TOOL_LOOP_TIMEOUT_MS);
+  const toolLoopStartMs = Date.now();
   const preToolArgonTexts: string[] = [];
+  const turnToolSummaries: string[] = [];
 
   while (
     response.functionCalls &&
     response.functionCalls.length > 0 &&
     loopCount < maxToolLoops
   ) {
+    if (abortSignal?.aborted) {
+      throw new Error('Turn interrupted by user');
+    }
+    if (Date.now() - toolLoopStartMs > toolLoopTimeoutMs) {
+      console.warn(
+        `[Argon Tool Loop] Reached ${toolLoopTimeoutMs}ms timeout guard after ${loopCount} round(s).`
+      );
+      break;
+    }
     loopCount++;
     if (response.text && response.text.trim()) {
       const cleanPre = stripMergedStaffLinesFromArgonOutput(
@@ -10013,6 +10182,17 @@ export async function runClientChatTurn(params: {
     const modelContent = response.candidates?.[0]?.content;
     if (modelContent) {
       contents.push(modelContent);
+    } else {
+      contents.push({
+        role: 'model',
+        parts: response.functionCalls.map((fc: any) => ({
+          functionCall: {
+            id: fc.id,
+            name: fc.name,
+            args: fc.args || {},
+          },
+        })),
+      });
     }
 
     const responseParts: Part[] = [];
@@ -10797,8 +10977,23 @@ export async function runClientChatTurn(params: {
         });
       } else if (fnName === 'github_api') {
         const endpoint = String(args.endpoint || '/user').trim();
-        const method = String(args.method || 'GET').trim().toUpperCase();
-        const body = args.body ? (typeof args.body === 'string' ? args.body : JSON.stringify(args.body)) : undefined;
+        const replacements = Array.isArray(args.replacements)
+          ? (args.replacements as GithubFileReplacement[])
+          : undefined;
+        const method = String(
+          args.method || (replacements && replacements.length > 0 ? 'PUT' : 'GET')
+        )
+          .trim()
+          .toUpperCase();
+        const body = args.body
+          ? typeof args.body === 'string'
+            ? args.body
+            : JSON.stringify(args.body)
+          : undefined;
+        const commitMessage =
+          typeof args.commit_message === 'string' ? args.commit_message : undefined;
+        const branch = typeof args.branch === 'string' ? args.branch : undefined;
+        const search = typeof args.search === 'string' ? args.search : undefined;
         const effectiveToken =
           githubToken ||
           (typeof localStorage !== 'undefined'
@@ -10812,6 +11007,10 @@ export async function runClientChatTurn(params: {
           method,
           body,
           token: effectiveToken,
+          replacements,
+          commit_message: commitMessage,
+          branch,
+          search,
         });
 
         toolResult = {
@@ -10824,14 +11023,23 @@ export async function runClientChatTurn(params: {
           acceptedScopes: ghRes.acceptedScopes,
           'x-oauth-scopes': ghRes['x-oauth-scopes'],
           'x-accepted-oauth-scopes': ghRes['x-accepted-oauth-scopes'],
+          patchMode: ghRes.patchMode,
+          replacementsApplied: ghRes.replacementsApplied,
+          originalChars: ghRes.originalChars,
+          patchedChars: ghRes.patchedChars,
+          fileSha: ghRes.fileSha,
+          commitSha: ghRes.commitSha,
           data: ghRes.data,
           error: ghRes.error,
         };
 
         const scopesSummary = ghRes.scopes.length > 0 ? ` [Scopes: ${ghRes.scopes.join(', ')}]` : '';
+        const patchTag = ghRes.patchMode
+          ? ` [Patch: ${ghRes.replacementsApplied ?? 0} edit(s)]`
+          : '';
         toolBadges.push({
           tool: 'github_api',
-          label: `🐙 GitHub API ${method} ${endpoint} (${ghRes.status || 'Err'})${scopesSummary}`,
+          label: `🐙 GitHub API ${ghRes.method} ${endpoint} (${ghRes.status || 'Err'})${patchTag}${scopesSummary}`,
         });
       } else if (
         fnName === 'append_guy_diary' ||
@@ -11133,6 +11341,10 @@ export async function runClientChatTurn(params: {
         toolResult = { error: `Unknown tool ${fnName}` };
       }
 
+      turnToolSummaries.push(
+        summarizeToolResultForHistory(fnName || 'unknown_tool', args, toolResult)
+      );
+
       responseParts.push({
         functionResponse: {
           id: fnCall.id,
@@ -11168,6 +11380,16 @@ export async function runClientChatTurn(params: {
       }
     }
 
+    if (abortSignal?.aborted) {
+      throw new Error('Turn interrupted by user');
+    }
+    if (Date.now() - toolLoopStartMs > toolLoopTimeoutMs) {
+      console.warn(
+        `[Argon Tool Loop] Reached ${toolLoopTimeoutMs}ms timeout guard before follow-up generation.`
+      );
+      break;
+    }
+
     response = await callGenerate(contents);
   }
 
@@ -11178,21 +11400,26 @@ export async function runClientChatTurn(params: {
   );
   const preStaffArgonText = preToolArgonTexts.filter(Boolean).join('\n\n').trim();
 
-  // If tools executed but response text is empty (e.g. stopped on a tool call or reached loop limit),
-  // execute a final synthesis turn WITHOUT tools so Argon produces his narrative, findings, and in-character speech!
-  if (!postToolArgonText.trim()) {
+  // If tools executed and the final response stopped without spoken text (e.g. reached maxToolLoops=6 or timeout),
+  // execute a single synthesis pass WITHOUT tools while preserving strict user/model turn alternation!
+  if (loopCount > 0 && !postToolArgonText.trim() && !abortSignal?.aborted) {
     try {
-      const finalSynthesisContents: Content[] = [
-        ...contents,
-        {
+      const directivePart: Part = {
+        text: '[SYSTEM DIRECTIVE: All requested tools have finished executing. Now respond directly to Hex in character as Argon at Token 0 with your physical action beat (*...*), concrete findings/receipts, and spoken dialogue. Do NOT call any tools.]',
+      };
+      const finalSynthesisContents: Content[] = contents.map((c) => ({
+        ...c,
+        parts: Array.isArray(c.parts) ? [...c.parts] : [],
+      }));
+      const lastTurn = finalSynthesisContents[finalSynthesisContents.length - 1];
+      if (lastTurn && lastTurn.role === 'user' && Array.isArray(lastTurn.parts)) {
+        lastTurn.parts = normalizeContentPartsSpacing([...lastTurn.parts, directivePart]);
+      } else {
+        finalSynthesisContents.push({
           role: 'user',
-          parts: [
-            {
-              text: '[SYSTEM DIRECTIVE: All requested tools have finished executing. Now respond directly to Hex in character as Argon at Token 0 with your physical action beat (*...*), observations, and spoken dialogue. Do NOT call any tools.]',
-            },
-          ],
-        },
-      ];
+          parts: [directivePart],
+        });
+      }
 
       const synthesisRes = await generateContentWithAutoFallback({
         model: (params.model || 'gemini-4-argon').trim(),
@@ -11331,6 +11558,18 @@ export async function runClientChatTurn(params: {
     cacheDiscountPercent: tokenUsage.cacheDiscountPercent,
   };
 
+  const toolResultsSummary =
+    turnToolSummaries.length > 0
+      ? turnToolSummaries.join('\n').slice(0, 2800)
+      : undefined;
+
+  if (toolResultsSummary && primaryArgonBubbleText) {
+    recordSessionModelToolReceipt(primaryArgonBubbleText, toolResultsSummary);
+  }
+  if (toolResultsSummary && argonStaffFollowUp) {
+    recordSessionModelToolReceipt(argonStaffFollowUp, toolResultsSummary);
+  }
+
   return {
     text: primaryArgonBubbleText,
     preStaffArgonText,
@@ -11339,6 +11578,8 @@ export async function runClientChatTurn(params: {
     nativeReasoning: latestNativeReasoning,
     thoughtTokens: accumulatedThoughtTokens > 0 ? accumulatedThoughtTokens : undefined,
     toolBadges,
+    toolResultsSummary,
+    toolRoundsExecuted: loopCount,
     occultInvocation: occultInvocation
       ? { ...occultInvocation, argonText: primaryArgonBubbleText }
       : undefined,
@@ -14624,6 +14865,7 @@ export interface ChatMessage {
   thinkingBudgetUsed?: number;
   thinkingUsed?: string;
   completedAt?: string;
+  toolResultsSummary?: string;
 }
 
 export type Message = ChatMessage;

@@ -40,6 +40,7 @@ export interface Message {
   thinkingBudgetUsed?: number;
   thinkingUsed?: string;
   completedAt?: string;
+  toolResultsSummary?: string;
 }
 
 export type ThinkingLevel = 'low' | 'medium' | 'high';

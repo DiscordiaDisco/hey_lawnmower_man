@@ -55,6 +55,8 @@ import {
   evaluatePokerOrShowdownHand,
   parseArgonCardTurnResponse,
   getStickerByShortcode,
+  executeGithubApi,
+  GithubFileReplacement,
 } from './src/utils/workbenchLogic.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -831,6 +833,62 @@ async function startServer() {
     } catch (err) {
       return res.status(500).json({
         synced: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // Surgical Server-Side String Patch endpoint (`replacements: [{ find, replace }]` + 1-shot SHA upsert)
+  app.post('/api/github/patch-file', async (req, res) => {
+    try {
+      const headerToken = (req.headers['x-github-token'] as string | undefined)?.trim();
+      const bodyToken = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+      const token = headerToken || bodyToken;
+
+      if (!token) {
+        return res.status(401).json({
+          ok: false,
+          error: 'GitHub Token is required.',
+        });
+      }
+
+      const {
+        owner = '',
+        repo = '',
+        repoFullName = '',
+        filePath = '',
+        endpoint: rawEndpoint = '',
+        branch = '',
+        commitMessage = '',
+        replacements = [],
+      } = req.body || {};
+
+      let resolvedEndpoint = String(rawEndpoint || '').trim();
+      if (!resolvedEndpoint) {
+        const cleanFullName = String(repoFullName || '').trim() || `${String(owner).trim()}/${String(repo).trim()}`;
+        const cleanPath = String(filePath || '').trim().replace(/^\/+/, '');
+        if (!cleanFullName.includes('/') || !cleanPath) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Provide either `endpoint` ("/repos/{owner}/{repo}/contents/{path}") or `repoFullName` + `filePath`.',
+          });
+        }
+        resolvedEndpoint = `/repos/${cleanFullName}/contents/${cleanPath}`;
+      }
+
+      const result = await executeGithubApi({
+        endpoint: resolvedEndpoint,
+        method: 'PUT',
+        token,
+        replacements: Array.isArray(replacements) ? (replacements as GithubFileReplacement[]) : [],
+        commit_message: typeof commitMessage === 'string' ? commitMessage : undefined,
+        branch: typeof branch === 'string' ? branch : undefined,
+      });
+
+      return res.status(result.ok ? 200 : result.status || 500).json(result);
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
         error: err instanceof Error ? err.message : String(err),
       });
     }

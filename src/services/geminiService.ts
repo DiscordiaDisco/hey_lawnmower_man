@@ -286,14 +286,201 @@ export async function executeGeminiGenerateContentStream(params: {
   };
 }
 
+export interface GithubFileReplacement {
+  find: string;
+  replace: string;
+  replace_all?: boolean;
+}
+
+/**
+ * Decodes GitHub base64 file content (which often includes line breaks) cleanly as UTF-8 text.
+ */
+export function decodeGithubBase64Utf8(rawBase64: string): string {
+  if (!rawBase64 || typeof rawBase64 !== 'string') return '';
+  const cleaned = rawBase64.replace(/\s+/g, '');
+  if (!cleaned) return '';
+  try {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(cleaned, 'base64').toString('utf-8');
+    }
+    if (typeof atob !== 'undefined' && typeof TextDecoder !== 'undefined') {
+      const bin = atob(cleaned);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) {
+        bytes[i] = bin.charCodeAt(i);
+      }
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+    if (typeof atob !== 'undefined') {
+      return decodeURIComponent(escape(atob(cleaned)));
+    }
+  } catch {
+    // ignore decode failure
+  }
+  return '';
+}
+
+/**
+ * Encodes UTF-8 text to standard base64 for GitHub /contents/ commits.
+ */
+export function encodeGithubUtf8Base64(text: string): string {
+  try {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(text, 'utf-8').toString('base64');
+    }
+    if (typeof btoa !== 'undefined' && typeof TextEncoder !== 'undefined') {
+      const bytes = new TextEncoder().encode(text);
+      let bin = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      return btoa(bin);
+    }
+    if (typeof btoa !== 'undefined') {
+      return btoa(unescape(encodeURIComponent(text)));
+    }
+  } catch {
+    // ignore encode failure
+  }
+  return '';
+}
+
+/**
+ * Applies exact string replacements safely in JS (<5ms even on 100KB files) without using
+ * String.prototype.replace special `$` substitution patterns (preserving `$&`, `$1`, `$$` in JS code)
+ * and gracefully handling CRLF vs LF line endings.
+ */
+export function applySurgicalFileReplacements(
+  originalText: string,
+  replacements: GithubFileReplacement[]
+): {
+  ok: boolean;
+  patchedText: string;
+  replacementsApplied: number;
+  appliedDetails: Array<{ index: number; occurrences: number; findPreview: string }>;
+  unmatchedDetails: Array<{ index: number; findPreview: string }>;
+} {
+  let working = originalText;
+  let totalApplied = 0;
+  const appliedDetails: Array<{ index: number; occurrences: number; findPreview: string }> = [];
+  const unmatchedDetails: Array<{ index: number; findPreview: string }> = [];
+
+  for (let i = 0; i < replacements.length; i++) {
+    const item = replacements[i];
+    const rawFind = typeof item?.find === 'string' ? item.find : '';
+    const rawReplace = typeof item?.replace === 'string' ? item.replace : '';
+    const replaceAll = Boolean(item?.replace_all);
+
+    if (!rawFind) {
+      unmatchedDetails.push({ index: i, findPreview: '(empty find string)' });
+      continue;
+    }
+
+    let targetFind = rawFind;
+    let targetReplace = rawReplace;
+    if (!working.includes(targetFind)) {
+      const crlfFind = rawFind.replace(/\r?\n/g, '\r\n');
+      const lfFind = rawFind.replace(/\r\n/g, '\n');
+      if (working.includes(crlfFind)) {
+        targetFind = crlfFind;
+        if (rawReplace.includes('\n') && !rawReplace.includes('\r\n')) {
+          targetReplace = rawReplace.replace(/\n/g, '\r\n');
+        }
+      } else if (working.includes(lfFind)) {
+        targetFind = lfFind;
+      }
+    }
+
+    const firstIdx = working.indexOf(targetFind);
+    if (firstIdx === -1) {
+      unmatchedDetails.push({
+        index: i,
+        findPreview: rawFind.slice(0, 140),
+      });
+      continue;
+    }
+
+    if (replaceAll) {
+      const segments = working.split(targetFind);
+      const count = segments.length - 1;
+      working = segments.join(targetReplace);
+      totalApplied += count;
+      appliedDetails.push({
+        index: i,
+        occurrences: count,
+        findPreview: rawFind.slice(0, 100),
+      });
+    } else {
+      working =
+        working.slice(0, firstIdx) +
+        targetReplace +
+        working.slice(firstIdx + targetFind.length);
+      totalApplied += 1;
+      appliedDetails.push({
+        index: i,
+        occurrences: 1,
+        findPreview: rawFind.slice(0, 100),
+      });
+    }
+  }
+
+  return {
+    ok: unmatchedDetails.length === 0 && totalApplied > 0,
+    patchedText: working,
+    replacementsApplied: totalApplied,
+    appliedDetails,
+    unmatchedDetails,
+  };
+}
+
+/**
+ * Extracts compact context windows around matching substrings inside large repo files.
+ */
+export function extractLargeFileSearchSnippets(
+  text: string,
+  query: string,
+  maxMatches = 6,
+  radiusChars = 500
+): Array<{ matchIndex: number; charOffset: number; lineApprox: number; excerpt: string }> {
+  const needle = (query || '').trim();
+  if (!text || !needle) return [];
+  const lowerText = text.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  const results: Array<{
+    matchIndex: number;
+    charOffset: number;
+    lineApprox: number;
+    excerpt: string;
+  }> = [];
+
+  let cursor = 0;
+  while (results.length < maxMatches && cursor < lowerText.length) {
+    const foundAt = lowerText.indexOf(lowerNeedle, cursor);
+    if (foundAt === -1) break;
+    const start = Math.max(0, foundAt - radiusChars);
+    const end = Math.min(text.length, foundAt + needle.length + radiusChars);
+    const lineApprox = text.slice(0, foundAt).split('\n').length;
+    results.push({
+      matchIndex: results.length + 1,
+      charOffset: foundAt,
+      lineApprox,
+      excerpt: text.slice(start, end),
+    });
+    cursor = foundAt + Math.max(1, needle.length);
+  }
+  return results;
+}
+
 /**
  * Tool Definition for `github_api`
- * Wire into Argon's live tool belt so Argon can inspect token scopes and interact with GitHub REST API directly.
+ * Wire into Argon's live tool belt so Argon & Staff can inspect repos, search large files,
+ * and surgically patch 60KB–85KB files via `replacements` in <100ms without massive output token burn.
  */
 export const githubApiDeclaration: FunctionDeclaration = {
   name: 'github_api',
   description:
-    'Calls the GitHub REST API using Hex’s saved GitHub token. Supports 1-Shot Upsert on PUT /repos/{owner}/{repo}/contents/{path}: if updating an existing file and "sha" is omitted, the SHA is automatically fetched behind the scenes so the commit succeeds in a single call. Call when Hex or an authorized Staff task requests GitHub operations.',
+    'Calls the GitHub REST API using Hex’s saved GitHub token. Supports: (1) SURGICAL PATCH MODE via `replacements: [{ find, replace }]` on `/repos/{owner}/{repo}/contents/{path}` (fetches existing file + SHA, applies exact string replacements in JS in <100ms, and commits via 1-shot SHA upsert—NEVER emit full 60KB–85KB files in `body` when editing existing files!), (2) `search` substring excerpt filter on `GET /repos/{owner}/{repo}/contents/{path}` to inspect specific sections of large files at tiny token cost, and (3) automatic 1-shot SHA upsert on `PUT /repos/{owner}/{repo}/contents/{path}`.',
   parameters: {
     type: Type.OBJECT,
     description: 'Parameters for the GitHub REST API call.',
@@ -301,17 +488,55 @@ export const githubApiDeclaration: FunctionDeclaration = {
       endpoint: {
         type: Type.STRING,
         description:
-          'The GitHub REST API path starting with "/" (e.g., "/user", "/user/repos", "/repos/{owner}/{repo}/contents/{path}", "/gists", "/user/codespaces", or "/repos/{owner}/{repo}/hooks").',
+          'The GitHub REST API path starting with "/" (e.g., "/user", "/user/repos", "/repos/{owner}/{repo}/contents/{path}", "/repos/{owner}/{repo}/pages", or "/gists").',
       },
       method: {
         type: Type.STRING,
         description:
-          'HTTP method for the request: "GET", "POST", "PUT", "PATCH", or "DELETE". Defaults to "GET".',
+          'HTTP method: "GET", "POST", "PUT", "PATCH", or "DELETE". Defaults to "PUT" when `replacements` is provided, otherwise "GET".',
       },
       body: {
         type: Type.STRING,
         description:
-          'Optional JSON string payload for POST/PUT/PATCH requests (includes automatic base64 encoding and automatic 1-shot SHA upsert for repo contents).',
+          'Optional JSON string payload for POST/PUT/PATCH requests (only needed for creating brand-new files or non-patch endpoints; for editing existing files, prefer `replacements` instead of sending the whole file!).',
+      },
+      replacements: {
+        type: Type.ARRAY,
+        description:
+          'SURGICAL STRING PATCH MODE for editing existing repo files (`/repos/{owner}/{repo}/contents/{path}`): pass an array of `{ find, replace, replace_all }` objects. The client fetches the file + SHA, applies all replacements in JS in <100ms, and commits via 1-shot SHA upsert without regenerating the whole file.',
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            find: {
+              type: Type.STRING,
+              description: 'Exact existing substring/block in the file to locate and replace.',
+            },
+            replace: {
+              type: Type.STRING,
+              description: 'Replacement string/block to insert in place of `find`.',
+            },
+            replace_all: {
+              type: Type.BOOLEAN,
+              description: 'Optional: set true to replace every occurrence of `find` in the file (defaults to false, replacing first match).',
+            },
+          },
+          required: ['find', 'replace'],
+        },
+      },
+      commit_message: {
+        type: Type.STRING,
+        description:
+          'Optional commit message when using `replacements` surgical patch mode (e.g. "fix: update FAQ section in index.html").',
+      },
+      branch: {
+        type: Type.STRING,
+        description:
+          'Optional branch name (e.g. "main" or "gh-pages") for GET inspection or surgical PUT/PATCH commits.',
+      },
+      search: {
+        type: Type.STRING,
+        description:
+          'Optional keyword/substring to search inside large files on `GET /repos/{owner}/{repo}/contents/{path}`, returning matching code excerpts + line numbers + file SHA with minimal tokens.',
       },
     },
     required: ['endpoint'],
@@ -817,6 +1042,12 @@ export interface GithubApiExecutionResult {
   'x-accepted-oauth-scopes': string;
   data: unknown;
   error?: string;
+  patchMode?: boolean;
+  replacementsApplied?: number;
+  originalChars?: number;
+  patchedChars?: number;
+  fileSha?: string;
+  commitSha?: string;
 }
 
 /**
@@ -841,16 +1072,15 @@ export function ensureBase64RepoContent(
   if (bodyObj && endpoint.toLowerCase().includes('/contents/') && typeof bodyObj.content === 'string') {
     const rawContent = bodyObj.content;
     const isBase64 =
-      /^[A-Za-z0-9+/]+={0,2}$/.test(rawContent.replace(/\s+/g, '')) && rawContent.length % 4 === 0;
+      rawContent.length > 0 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(rawContent.replace(/\s+/g, '')) &&
+      rawContent.replace(/\s+/g, '').length % 4 === 0 &&
+      !rawContent.includes(' ') &&
+      !rawContent.includes('<');
     if (!isBase64) {
-      try {
-        if (typeof btoa !== 'undefined') {
-          bodyObj.content = btoa(unescape(encodeURIComponent(rawContent)));
-        } else if (typeof Buffer !== 'undefined') {
-          bodyObj.content = Buffer.from(rawContent, 'utf-8').toString('base64');
-        }
-      } catch {
-        // keep original if encoding fails
+      const encoded = encodeGithubUtf8Base64(rawContent);
+      if (encoded) {
+        bodyObj.content = encoded;
       }
     }
   }
@@ -858,16 +1088,53 @@ export function ensureBase64RepoContent(
   return bodyObj ? JSON.stringify(bodyObj) : typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody);
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = 45000
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: init.signal || ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeReplacementList(raw: unknown): GithubFileReplacement[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r) => r && typeof r === 'object' && typeof (r as any).find === 'string')
+    .map((r: any) => ({
+      find: String(r.find),
+      replace: typeof r.replace === 'string' ? r.replace : String(r.replace ?? ''),
+      replace_all: Boolean(r.replace_all ?? r.replaceAll),
+    }));
+}
+
 /**
  * Universal GitHub REST API execution helper.
- * Reads token from localStorage ('argon_github_token' or 'argon_gh_token') or supplied token.
- * Captures x-oauth-scopes and x-accepted-oauth-scopes headers.
+ * Supports:
+ * 1. Surgical String Patch mode (`replacements: [{ find, replace }]`) on `/repos/{owner}/{repo}/contents/{path}`
+ *    with <100ms in-memory JS patching and 1-shot SHA upsert.
+ * 2. Smart UTF-8 decoding + `search` excerpt windowing on `GET /repos/{owner}/{repo}/contents/{path}`
+ *    so 60KB–85KB files never dump unreadable base64 into context.
+ * 3. Standard 1-shot SHA upsert on `PUT /repos/{owner}/{repo}/contents/{path}`.
  */
 export async function executeGithubApi(params: {
   endpoint: string;
   method?: string;
   body?: string;
   token?: string;
+  replacements?: GithubFileReplacement[];
+  commit_message?: string;
+  branch?: string;
+  search?: string;
+  timeoutMs?: number;
 }): Promise<GithubApiExecutionResult> {
   const token = (
     params.token ||
@@ -893,9 +1160,255 @@ export async function executeGithubApi(params: {
     };
   }
 
+  const timeoutMs = params.timeoutMs ?? 45000;
   const rawEndpoint = String(params.endpoint || '').trim();
-  const endpoint = rawEndpoint.startsWith('/') ? rawEndpoint : `/${rawEndpoint}`;
-  const method = (params.method || 'GET').toUpperCase();
+  const baseEndpoint = rawEndpoint.startsWith('/') ? rawEndpoint : `/${rawEndpoint}`;
+
+  let parsedBodyObj: Record<string, unknown> | null = null;
+  if (params.body) {
+    try {
+      const candidate = JSON.parse(params.body);
+      if (candidate && typeof candidate === 'object') {
+        parsedBodyObj = candidate as Record<string, unknown>;
+      }
+    } catch {
+      parsedBodyObj = null;
+    }
+  }
+
+  const effectiveReplacements =
+    Array.isArray(params.replacements) && params.replacements.length > 0
+      ? normalizeReplacementList(params.replacements)
+      : parsedBodyObj
+      ? normalizeReplacementList(
+          parsedBodyObj.replacements || parsedBodyObj.patches || parsedBodyObj.search_replace
+        )
+      : [];
+
+  const effectiveBranch = (
+    params.branch ||
+    (typeof parsedBodyObj?.branch === 'string' ? parsedBodyObj.branch : '') ||
+    ''
+  ).trim();
+
+  const effectiveSearch = (
+    params.search ||
+    (typeof parsedBodyObj?.search === 'string' ? parsedBodyObj.search : '') ||
+    ''
+  ).trim();
+
+  const isContentsEndpoint = baseEndpoint.toLowerCase().includes('/contents/');
+  const requestedMethod = (
+    params.method ||
+    (effectiveReplacements.length > 0 ? 'PUT' : 'GET')
+  ).toUpperCase();
+
+  const authHeaders: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'Content-Type': 'application/json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  // ============================================================================
+  // MODE 1: SURGICAL STRING PATCH (`replacements: [{ find, replace }]`)
+  // ============================================================================
+  if (effectiveReplacements.length > 0 && isContentsEndpoint) {
+    const getEndpointWithRef =
+      effectiveBranch && !baseEndpoint.includes('?ref=')
+        ? `${baseEndpoint}${baseEndpoint.includes('?') ? '&' : '?'}ref=${encodeURIComponent(effectiveBranch)}`
+        : baseEndpoint;
+
+    try {
+      const checkRes = await fetchWithTimeout(
+        `https://api.github.com${getEndpointWithRef}`,
+        { method: 'GET', headers: authHeaders },
+        timeoutMs
+      );
+      const scopesHeader = checkRes.headers.get('x-oauth-scopes') || '';
+      const acceptedScopesHeader = checkRes.headers.get('x-accepted-oauth-scopes') || '';
+      const scopes = scopesHeader
+        ? scopesHeader.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      const acceptedScopes = acceptedScopesHeader
+        ? acceptedScopesHeader.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+
+      if (!checkRes.ok) {
+        const errPayload = await checkRes.json().catch(() => null);
+        return {
+          status: checkRes.status,
+          statusText: checkRes.statusText,
+          ok: false,
+          endpoint: baseEndpoint,
+          method: 'PUT',
+          scopes,
+          acceptedScopes,
+          'x-oauth-scopes': scopesHeader,
+          'x-accepted-oauth-scopes': acceptedScopesHeader,
+          data: errPayload,
+          patchMode: true,
+          error:
+            (errPayload && typeof errPayload.message === 'string' && errPayload.message) ||
+            `Failed to fetch target file for surgical patch (HTTP ${checkRes.status})`,
+        };
+      }
+
+      const fileData = (await checkRes.json()) as {
+        sha?: string;
+        content?: string;
+        encoding?: string;
+        size?: number;
+        git_url?: string;
+      };
+      const currentSha = String(fileData?.sha || '').trim();
+      let originalText = '';
+
+      if (typeof fileData?.content === 'string' && fileData.content.trim()) {
+        originalText = decodeGithubBase64Utf8(fileData.content);
+      } else if (fileData?.git_url) {
+        const blobRes = await fetchWithTimeout(
+          fileData.git_url,
+          { method: 'GET', headers: authHeaders },
+          timeoutMs
+        );
+        if (blobRes.ok) {
+          const blobJson = (await blobRes.json()) as { content?: string };
+          if (typeof blobJson?.content === 'string') {
+            originalText = decodeGithubBase64Utf8(blobJson.content);
+          }
+        }
+      }
+
+      const patchOutcome = applySurgicalFileReplacements(originalText, effectiveReplacements);
+      if (!patchOutcome.ok) {
+        return {
+          status: 422,
+          statusText: 'Unprocessable Entity (Unmatched Replacement)',
+          ok: false,
+          endpoint: baseEndpoint,
+          method: 'PUT',
+          scopes,
+          acceptedScopes,
+          'x-oauth-scopes': scopesHeader,
+          'x-accepted-oauth-scopes': acceptedScopesHeader,
+          patchMode: true,
+          replacementsApplied: patchOutcome.replacementsApplied,
+          originalChars: originalText.length,
+          fileSha: currentSha,
+          data: {
+            sha: currentSha,
+            totalChars: originalText.length,
+            appliedDetails: patchOutcome.appliedDetails,
+            unmatchedDetails: patchOutcome.unmatchedDetails,
+            hint: 'One or more `find` strings did not match exact text in the file. Call github_api GET with `search: "keyword"` to inspect the exact lines, then retry `replacements`.',
+          },
+          error: `Surgical patch aborted safely without modifying file: ${patchOutcome.unmatchedDetails.length} replacement(s) did not match exact text.`,
+        };
+      }
+
+      const commitMessage =
+        (params.commit_message && params.commit_message.trim()) ||
+        (typeof parsedBodyObj?.message === 'string' && parsedBodyObj.message.trim()) ||
+        `chore: surgical patch (${patchOutcome.replacementsApplied} replacement${patchOutcome.replacementsApplied === 1 ? '' : 's'})`;
+
+      const putPayload: Record<string, unknown> = {
+        message: commitMessage,
+        content: encodeGithubUtf8Base64(patchOutcome.patchedText),
+        sha: currentSha,
+      };
+      if (effectiveBranch) {
+        putPayload.branch = effectiveBranch;
+      }
+
+      const cleanPutEndpoint = baseEndpoint.split('?')[0];
+      const putRes = await fetchWithTimeout(
+        `https://api.github.com${cleanPutEndpoint}`,
+        {
+          method: 'PUT',
+          headers: authHeaders,
+          body: JSON.stringify(putPayload),
+        },
+        timeoutMs
+      );
+
+      const putScopesHeader = putRes.headers.get('x-oauth-scopes') || scopesHeader;
+      const putAcceptedHeader =
+        putRes.headers.get('x-accepted-oauth-scopes') || acceptedScopesHeader;
+      const putData = (await putRes.json().catch(() => null)) as any;
+      const newFileSha = String(putData?.content?.sha || currentSha);
+      const commitSha = String(putData?.commit?.sha || '');
+
+      return {
+        status: putRes.status,
+        statusText: putRes.statusText,
+        ok: putRes.ok,
+        endpoint: cleanPutEndpoint,
+        method: 'PUT',
+        scopes: putScopesHeader
+          ? putScopesHeader.split(',').map((s) => s.trim()).filter(Boolean)
+          : scopes,
+        acceptedScopes: putAcceptedHeader
+          ? putAcceptedHeader.split(',').map((s) => s.trim()).filter(Boolean)
+          : acceptedScopes,
+        'x-oauth-scopes': putScopesHeader,
+        'x-accepted-oauth-scopes': putAcceptedHeader,
+        patchMode: true,
+        replacementsApplied: patchOutcome.replacementsApplied,
+        originalChars: originalText.length,
+        patchedChars: patchOutcome.patchedText.length,
+        fileSha: newFileSha,
+        commitSha: commitSha || undefined,
+        data: putRes.ok
+          ? {
+              patchMode: true,
+              replacementsApplied: patchOutcome.replacementsApplied,
+              appliedDetails: patchOutcome.appliedDetails,
+              originalChars: originalText.length,
+              patchedChars: patchOutcome.patchedText.length,
+              path: putData?.content?.path,
+              fileSha: newFileSha,
+              commitSha,
+              htmlUrl: putData?.content?.html_url || putData?.commit?.html_url,
+              commitMessage,
+            }
+          : putData,
+        error: putRes.ok
+          ? undefined
+          : (putData && typeof putData.message === 'string' && putData.message) ||
+            `GitHub surgical PUT failed with HTTP ${putRes.status}`,
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        status: 0,
+        statusText: 'Network/Timeout Error',
+        ok: false,
+        endpoint: baseEndpoint,
+        method: 'PUT',
+        scopes: [],
+        acceptedScopes: [],
+        'x-oauth-scopes': '',
+        'x-accepted-oauth-scopes': '',
+        data: null,
+        patchMode: true,
+        error: msg,
+      };
+    }
+  }
+
+  // ============================================================================
+  // MODE 2: STANDARD GITHUB REST CALL (+ 1-SHOT SHA UPSERT & SMART GET DECODER)
+  // ============================================================================
+  const method =
+    requestedMethod === 'PATCH' && isContentsEndpoint && parsedBodyObj?.content
+      ? 'PUT'
+      : requestedMethod;
+
+  const endpoint =
+    method === 'GET' && effectiveBranch && isContentsEndpoint && !baseEndpoint.includes('?ref=')
+      ? `${baseEndpoint}${baseEndpoint.includes('?') ? '&' : '?'}ref=${encodeURIComponent(effectiveBranch)}`
+      : baseEndpoint;
   const url = `https://api.github.com${endpoint}`;
 
   let preparedBody =
@@ -903,26 +1416,32 @@ export async function executeGithubApi(params: {
       ? undefined
       : ensureBase64RepoContent(params.body, endpoint);
 
-  // One-Shot GitHub Upsert:
-  // If updating a repo file via PUT /repos/{owner}/{repo}/contents/{path} and no sha was supplied,
-  // automatically fetch current file SHA via GET behind the scenes so the commit succeeds in a single call!
-  if (method === 'PUT' && endpoint.toLowerCase().includes('/contents/') && preparedBody) {
+  // One-Shot GitHub Upsert when updating a repo file via PUT /repos/{owner}/{repo}/contents/{path} without sha
+  if (method === 'PUT' && isContentsEndpoint && preparedBody) {
     try {
       const parsedBody = JSON.parse(preparedBody);
+      if (effectiveBranch && !parsedBody.branch) {
+        parsedBody.branch = effectiveBranch;
+        preparedBody = JSON.stringify(parsedBody);
+      }
       if (!parsedBody.sha) {
         try {
           const checkUrl =
             parsedBody.branch && !url.includes('?ref=')
-              ? `${url}?ref=${encodeURIComponent(String(parsedBody.branch))}`
+              ? `${url}${url.includes('?') ? '&' : '?'}ref=${encodeURIComponent(String(parsedBody.branch))}`
               : url;
-          const checkRes = await fetch(checkUrl, {
-            method: 'GET',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/vnd.github+json',
-              'X-GitHub-Api-Version': '2022-11-28',
+          const checkRes = await fetchWithTimeout(
+            checkUrl,
+            {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/vnd.github+json',
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
             },
-          });
+            timeoutMs
+          );
           if (checkRes.ok) {
             const checkData = (await checkRes.json()) as { sha?: string };
             if (checkData && typeof checkData.sha === 'string' && checkData.sha) {
@@ -939,19 +1458,16 @@ export async function executeGithubApi(params: {
     }
   }
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-    'X-GitHub-Api-Version': '2022-11-28',
-  };
-
   try {
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: preparedBody,
-    });
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method,
+        headers: authHeaders,
+        body: preparedBody,
+      },
+      timeoutMs
+    );
 
     const scopesHeader = res.headers.get('x-oauth-scopes') || '';
     const acceptedScopesHeader = res.headers.get('x-accepted-oauth-scopes') || '';
@@ -978,6 +1494,58 @@ export async function executeGithubApi(params: {
       }
     }
 
+    let extractedFileSha: string | undefined;
+    let extractedCommitSha: string | undefined;
+
+    // Decode base64 file payloads on GET /contents/ so Argon & Staff read clean UTF-8 (and search excerpts on 60KB+ files)
+    if (
+      res.ok &&
+      method === 'GET' &&
+      isContentsEndpoint &&
+      data &&
+      typeof data === 'object' &&
+      !Array.isArray(data) &&
+      (data as any).encoding === 'base64' &&
+      typeof (data as any).content === 'string'
+    ) {
+      const fileObj = data as Record<string, unknown>;
+      extractedFileSha = typeof fileObj.sha === 'string' ? fileObj.sha : undefined;
+      const decoded = decodeGithubBase64Utf8(String(fileObj.content));
+      const totalChars = decoded.length;
+      const MAX_INLINE_DECODED_CHARS = 16000;
+
+      const compactFileObj: Record<string, unknown> = {
+        name: fileObj.name,
+        path: fileObj.path,
+        sha: fileObj.sha,
+        size: fileObj.size,
+        html_url: fileObj.html_url,
+        download_url: fileObj.download_url,
+        totalChars,
+      };
+
+      if (effectiveSearch) {
+        compactFileObj.searchQuery = effectiveSearch;
+        compactFileObj.searchMatches = extractLargeFileSearchSnippets(decoded, effectiveSearch, 6, 500);
+        compactFileObj.patchHint =
+          'Pass `replacements: [{ find, replace }]` to `github_api` PUT/PATCH to update exact lines in <100ms without sending the entire file.';
+      } else if (totalChars > MAX_INLINE_DECODED_CHARS) {
+        const head = decoded.slice(0, 8000);
+        const tail = decoded.slice(-4000);
+        compactFileObj.truncated = true;
+        compactFileObj.decodedContentPreview = `${head}\n\n/* ... [MIDDLE OMITTED (${totalChars} total chars) — call github_api GET with search: "keyword" to inspect specific middle sections, and use replacements: [{ find, replace }] to patch surgically!] ... */\n\n${tail}`;
+      } else {
+        compactFileObj.truncated = false;
+        compactFileObj.decodedContent = decoded;
+      }
+      data = compactFileObj;
+    } else if (res.ok && data && typeof data === 'object' && !Array.isArray(data)) {
+      const obj = data as any;
+      if (typeof obj?.content?.sha === 'string') extractedFileSha = obj.content.sha;
+      else if (typeof obj?.sha === 'string') extractedFileSha = obj.sha;
+      if (typeof obj?.commit?.sha === 'string') extractedCommitSha = obj.commit.sha;
+    }
+
     return {
       status: res.status,
       statusText: res.statusText,
@@ -988,6 +1556,8 @@ export async function executeGithubApi(params: {
       acceptedScopes,
       'x-oauth-scopes': scopesHeader,
       'x-accepted-oauth-scopes': acceptedScopesHeader,
+      fileSha: extractedFileSha,
+      commitSha: extractedCommitSha,
       data,
       error: res.ok
         ? undefined

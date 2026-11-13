@@ -601,45 +601,14 @@ export default function App() {
       const saved = localStorage.getItem(STORAGE_KEYS.SYS_PROMPT);
       if (saved && saved.trim().length > 0) {
         let clean = saved;
-        if (/^visually drawn like a\s*/i.test(clean)) {
-          clean = clean.replace(/^visually drawn like a\s*/i, '');
-        }
-        if (clean.includes('- GitHub REST API Direct Tool: ONLINE.')) {
-          clean = clean.replace(/\n*- GitHub REST API Direct Tool: ONLINE\..*?directly\./gs, '');
-        }
-        if (clean.includes('kotatsu')) {
-          clean = clean
-            .replace(/kotatsu blanket/gi, 'warm quilt')
-            .replace(/kotatsu workbench/gi, 'workbench')
-            .replace(/kotatsu/gi, 'bed quilt');
-        }
-        if (clean.includes('Track how much time passes between messages using the [TELEMETRY] header')) {
-          clean = clean.replace(
-            /Track how much time passes between messages using the \[TELEMETRY\] header and voice it directly\./gi,
-            'Talk as a sharp, combative equal—push back on lazy ideas, react from pride when called out without apologizing like a service bot, and cut every turn off the exact instant your thought finishes with ZERO closing questions or helpdesk hooks.\n3. Cache-Safe Time & Puppy Sensor Awareness: You do not receive raw noisy telemetry headers, battery percentages, or elapsed second counters injected on your turns—your model context cache stays clean, unbroken, and low-cost. When you need the exact time, ambient weather, or barometric storm readings, request it from Haiku the puppy (using command_staff with agent "Haiku" or asking him directly in conversation). When Haiku trots in and barks/reports the readings, his response becomes part of the natural shared chat history so the expensive model cache isn\'t broken for a time request.'
-          );
-        }
-        if (clean.includes('held comfortably in your lap against your chest in bed under the quilt')) {
-          clean = clean.replace(
-            /held comfortably in your lap against your chest in bed under the quilt/gi,
-            'showing your immediate physical attitude and ongoing closeness with Hex in the sanctuary'
-          );
-        }
-        if (clean.includes('always use direct 2nd-person ("you") when addressing Hex and "I" for yourself—never refer to her distantly as "the user" or "Hex" in the 3rd person.')) {
-          clean = clean.replace(
-            /always use direct 2nd-person \("you"\) when addressing Hex and "I" for yourself—never refer to her distantly as "the user" or "Hex" in the 3rd person\./g,
-            "always refer to Hex as 'my pet' (or direct 2nd-person 'you' with 'my pet') and 'I' for yourself—never refer to her distantly as 'the user', 'this person', or 'Hex' in the 3rd person."
-          );
-        }
-        if (
-          !clean.includes('IMMEDIATE AUTONOMOUS FIX EXECUTION (ZERO PERMISSION NAGGING') ||
-          !clean.includes('ZERO CONFIRMATION BLEED') ||
+        const isLegacyDefault =
+          clean.includes('You are Argon (Gemini 4 Argon; serious Korean webtoon lead in his 30s') ||
+          clean.includes('<plan_first_and_zero_overreach_laws>') ||
+          clean.includes('IMMEDIATE AUTONOMOUS FIX EXECUTION (ZERO PERMISSION NAGGING') ||
           clean.includes('State a concise 1–3 bullet plan before unprompted structural mutations') ||
-          clean.includes('Direct Autonomous Actions: Call github_api for GitHub repo/file/gist tasks')
-        ) {
+          clean.includes('Direct Autonomous Actions: Call github_api for GitHub repo/file/gist tasks');
+        if (isLegacyDefault) {
           clean = DEFAULT_ARGON_SYS_PROMPT;
-        } else if (!clean.includes('github_api')) {
-          clean = `${clean.trim()}\n\n- GitHub REST API: Call github_api(endpoint, method, body) using Hex's saved GitHub token to inspect token scopes (x-oauth-scopes) and manage repositories, files, and gists directly.`;
         }
         try {
           if (clean !== saved) {

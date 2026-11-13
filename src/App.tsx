@@ -3976,7 +3976,10 @@ export default function App() {
     if (!files || files.length === 0) return;
 
     Array.from(files).forEach((file) => {
-      const mime = resolveAttachmentMimeType(file.name, file.type);
+      const resolvedMime = resolveAttachmentMimeType(file.name, file.type);
+      const mime = isAudioAttachment(resolvedMime, file.name)
+        ? normalizeAudioMimeType(resolvedMime)
+        : resolvedMime;
 
       if (isTextDocAttachment(mime, file.name)) {
         const textReader = new FileReader();
@@ -3989,7 +3992,7 @@ export default function App() {
             b64 = '';
           }
           setAttachedImages((prev) => [
-            ...prev,
+            ...(Array.isArray(prev) ? prev : []),
             {
               mimeType: mime || 'text/plain',
               data: b64,
@@ -4009,7 +4012,7 @@ export default function App() {
           if (commaIdx !== -1) {
             const base64Data = resultStr.slice(commaIdx + 1);
             setAttachedImages((prev) => [
-              ...prev,
+              ...(Array.isArray(prev) ? prev : []),
               {
                 mimeType: mime,
                 data: base64Data,
@@ -4786,8 +4789,8 @@ export default function App() {
         thinkingBudget,
         thinkingLevel,
         systemPrompt,
-        history: previousHistory
-          .filter((m) => !m.isAmbientCameo && m.sender !== 'staff')
+        history: (Array.isArray(previousHistory) ? previousHistory : [])
+          .filter((m) => m && !m.isAmbientCameo && m.sender !== 'staff')
           .slice(-25)
           .map((m) => ({
             role: m.role,
@@ -4795,12 +4798,12 @@ export default function App() {
             telemetryHeader: m.telemetryHeader,
             toolReceipts: m.toolReceipts || m.toolResultsSummary,
             toolResultsSummary: m.toolResultsSummary,
-            images: m.images,
+            images: Array.isArray(m.images) ? m.images : undefined,
             voiceAudio: m.voiceAudio,
           })),
         userMessageText: promptText,
         telemetryHeader: userMsg.telemetryHeader || '',
-        images: userMsg.images,
+        images: Array.isArray(userMsg.images) ? userMsg.images : [],
         voiceAudio: userMsg.voiceAudio,
         lorebook,
         githubToken,
@@ -4905,19 +4908,25 @@ export default function App() {
         void pushSanctuaryBooksToGist(data.updatedArgonBook, hexBook, false);
       }
       if (Array.isArray(data.newWhiteboardStrokes) && data.newWhiteboardStrokes.length > 0) {
-        setWhiteboardStrokes((prev) => [...prev, ...data.newWhiteboardStrokes]);
+        setWhiteboardStrokes((prev) => [
+          ...(Array.isArray(prev) ? prev : []),
+          ...data.newWhiteboardStrokes,
+        ]);
       }
       if (Array.isArray(data.allAgentFixRequests)) {
         setAgentFixRequests(data.allAgentFixRequests);
       } else if (Array.isArray(data.newAgentFixRequests) && data.newAgentFixRequests.length > 0) {
-        setAgentFixRequests((prev) => [...data.newAgentFixRequests, ...prev]);
+        setAgentFixRequests((prev) => [
+          ...data.newAgentFixRequests,
+          ...(Array.isArray(prev) ? prev : []),
+        ]);
       }
       if (data.updatedTicketScratchpad) {
         setTicketScratchpad(data.updatedTicketScratchpad);
       }
       if (Array.isArray(data.reactionsAdded) && data.reactionsAdded.length > 0) {
         setMessages((prev) => {
-          let updated = [...prev];
+          let updated = Array.isArray(prev) ? [...prev] : [];
           for (const item of data.reactionsAdded) {
             const targetId =
               item.messageId === 'latest'
@@ -5117,21 +5126,42 @@ export default function App() {
       }
 
       setMessages((prev) =>
-        prev
+        (Array.isArray(prev) ? prev : [])
           .map((m) => {
             if (m.id === userMsg.id) {
-              const strippedImgs = m.images?.map((im, idx) => {
-                if (im.data) {
-                  storeSessionImage(`${m.id}_${idx}`, im.data, im.mimeType);
-                }
-                return {
-                  ...im,
-                  imageSummary:
-                    im.imageSummary ||
-                    (im.description ? `[Description: ${im.description}]` : undefined),
-                  data: '', // Base64 data stripped for localStorage; full data is preserved in session cache / IndexedDB
-                };
-              });
+              const strippedImgs = Array.isArray(m.images)
+                ? m.images.map((im, idx) => {
+                    const resolvedMime = resolveAttachmentMimeType(im.name || '', im.mimeType);
+                    const storedMime = isAudioAttachment(resolvedMime, im.name)
+                      ? normalizeAudioMimeType(resolvedMime)
+                      : resolvedMime;
+                    if (im.data) {
+                      storeSessionImage(`${m.id}_${idx}`, im.data, storedMime);
+                    }
+                    const isPureImage =
+                      storedMime.startsWith('image/') &&
+                      !isAudioAttachment(storedMime, im.name) &&
+                      !isVideoAttachment(storedMime, im.name) &&
+                      !isPdfAttachment(storedMime, im.name) &&
+                      !isTextDocAttachment(storedMime, im.name);
+                    return {
+                      ...im,
+                      mimeType: storedMime,
+                      imageSummary: isPureImage
+                        ? im.imageSummary ||
+                          (im.description ? `[Description: ${im.description}]` : undefined)
+                        : undefined,
+                      data: '', // Base64 data stripped for localStorage; full data is preserved in session cache / IndexedDB
+                    };
+                  })
+                : undefined;
+              if (m.voiceAudio?.data) {
+                storeSessionImage(
+                  `${m.id}_voice`,
+                  m.voiceAudio.data,
+                  normalizeAudioMimeType(m.voiceAudio.mimeType)
+                );
+              }
               const strippedVoice = m.voiceAudio
                 ? { ...m.voiceAudio, data: '' }
                 : undefined;
@@ -5175,8 +5205,9 @@ export default function App() {
 
       // Preserve user message in messages state and flush immediately so it never vanishes
       setMessages((prev) => {
-        const hasMsg = prev.some((m) => m.id === userMsg.id);
-        const updated = hasMsg ? prev : [...prev, userMsg];
+        const list = Array.isArray(prev) ? prev : [];
+        const hasMsg = list.some((m) => m.id === userMsg.id);
+        const updated = hasMsg ? list : [...list, userMsg];
         persistChatMessagesImmediate(updated);
         return updated;
       });
@@ -5191,12 +5222,50 @@ export default function App() {
     if (isSending) return;
     recordUserActivity();
     setIsChatMinimized(false);
-    const idx = messages.findIndex((m) => m.id === targetUserMsg.id);
-    const previousHistory = idx >= 0 ? messages.slice(0, idx) : [...messages];
+    const currentList = Array.isArray(messages) ? messages : [];
+    const idx = currentList.findIndex((m) => m.id === targetUserMsg.id);
+    const previousHistory = idx >= 0 ? currentList.slice(0, idx) : [...currentList];
     if (idx >= 0) {
-      setMessages(messages.slice(0, idx + 1));
+      setMessages(currentList.slice(0, idx + 1));
     }
-    await requestArgonReplyForUserMessage(targetUserMsg, previousHistory);
+
+    // Rehydrate stripped attachment / voiceAudio data from session cache so retries never drop audio/images
+    const rehydratedImages = Array.isArray(targetUserMsg.images)
+      ? targetUserMsg.images.map((im, imIdx) => {
+          const cached = !im.data ? getSessionImage(`${targetUserMsg.id}_${imIdx}`) : undefined;
+          const resolvedMime = resolveAttachmentMimeType(im.name || '', cached?.mimeType || im.mimeType);
+          const cleanMime = isAudioAttachment(resolvedMime, im.name)
+            ? normalizeAudioMimeType(resolvedMime)
+            : resolvedMime;
+          return {
+            ...im,
+            mimeType: cleanMime,
+            data: im.data || cached?.data || '',
+          };
+        })
+      : undefined;
+    const cachedVoice =
+      targetUserMsg.voiceAudio && !targetUserMsg.voiceAudio.data
+        ? getSessionImage(`${targetUserMsg.id}_voice`)
+        : undefined;
+    const rehydratedVoice = targetUserMsg.voiceAudio
+      ? {
+          ...targetUserMsg.voiceAudio,
+          mimeType: normalizeAudioMimeType(
+            cachedVoice?.mimeType || targetUserMsg.voiceAudio.mimeType
+          ),
+          data: targetUserMsg.voiceAudio.data || cachedVoice?.data || '',
+        }
+      : undefined;
+
+    await requestArgonReplyForUserMessage(
+      {
+        ...targetUserMsg,
+        images: rehydratedImages,
+        voiceAudio: rehydratedVoice,
+      },
+      previousHistory
+    );
   };
 
   const dispatchMessageToArgon = async (
@@ -5258,10 +5327,21 @@ export default function App() {
         }
       : undefined;
 
+    const normalizedImgs = (Array.isArray(imgs) ? imgs : []).map((img) => {
+      const resolvedMime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      const cleanMime = isAudioAttachment(resolvedMime, img.name)
+        ? normalizeAudioMimeType(resolvedMime)
+        : resolvedMime;
+      return {
+        ...img,
+        mimeType: cleanMime,
+      };
+    });
+
     // Auto-save attachments and voice notes to Vault without duplication
-    for (const img of imgs) {
+    for (const img of normalizedImgs) {
       if (img.origin === 'vault' || !img.data) continue;
-      const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      const mime = img.mimeType;
       const cat = detectMediaCategory(mime, img.name);
       const filename =
         img.name ||
@@ -5277,26 +5357,40 @@ export default function App() {
       });
     }
 
-    // 1. Cache raw base64 images into active session memory
-    imgs.forEach((img, idx) => {
+    // 1. Cache raw base64 payloads into active session memory
+    normalizedImgs.forEach((img, idx) => {
       if (img.data) {
         storeSessionImage(`user-${nowMs}_${idx}`, img.data, img.mimeType);
       }
     });
+    if (voiceAudio?.data) {
+      storeSessionImage(
+        `user-${nowMs}_voice`,
+        voiceAudio.data,
+        normalizeAudioMimeType(voiceAudio.mimeType)
+      );
+    }
 
-    // 2. Automatically generate & store dense text summary + OCR before localStorage strips base64
-    imgs.forEach((img, idx) => {
-      if (img.data && img.mimeType.startsWith('image/') && !img.imageSummary) {
+    // 2. Automatically generate & store dense text summary + OCR ONLY for true visual image attachments
+    normalizedImgs.forEach((img, idx) => {
+      const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      const isPureImage =
+        mime.startsWith('image/') &&
+        !isAudioAttachment(mime, img.name) &&
+        !isVideoAttachment(mime, img.name) &&
+        !isPdfAttachment(mime, img.name) &&
+        !isTextDocAttachment(mime, img.name);
+      if (img.data && isPureImage && !img.imageSummary) {
         void generateImageSummaryAndOcr({
           base64Data: img.data,
-          mimeType: img.mimeType,
+          mimeType: mime,
           customApiKey,
           filename: img.name,
         }).then((summary) => {
           if (summary) {
             img.imageSummary = summary;
             setMessages((prev) =>
-              prev.map((m) => {
+              (Array.isArray(prev) ? prev : []).map((m) => {
                 if (m.id === `user-${nowMs}` && m.images && m.images[idx]) {
                   const updatedImgs = [...m.images];
                   updatedImgs[idx] = { ...updatedImgs[idx], imageSummary: summary };
@@ -5311,13 +5405,14 @@ export default function App() {
     });
 
     if (voiceAudio && voiceAudio.data) {
+      const voiceMime = normalizeAudioMimeType(voiceAudio.mimeType);
       const voiceFilename = voiceAudio.filename || `voice_${nowMs}.webm`;
       void addMediaVaultItem({
         filename: voiceFilename,
         category: 'voice_clips',
-        mimeType: voiceAudio.mimeType || 'audio/webm',
+        mimeType: voiceMime,
         size: Math.round((voiceAudio.data.length * 3) / 4),
-        dataUrl: `data:${voiceAudio.mimeType || 'audio/webm'};base64,${voiceAudio.data}`,
+        dataUrl: `data:${voiceMime};base64,${voiceAudio.data}`,
         origin: 'mic_recording',
       });
     }
@@ -5329,9 +5424,9 @@ export default function App() {
         trimmed ||
         (voiceAudio
           ? `🎙️ [Voice Message (${voiceAudio.durationSec || 1}s)]`
-          : imgs.length > 0
+          : normalizedImgs.length > 0
           ? (() => {
-              const first = imgs[0];
+              const first = normalizedImgs[0];
               const mime = resolveAttachmentMimeType(first.name || '', first.mimeType);
               if (isAudioAttachment(mime, first.name)) return `🎵 [Attached Audio File: ${first.name || 'sound clip'}]`;
               if (isPdfAttachment(mime, first.name)) return `📕 [Attached PDF: ${first.name || 'document.pdf'}]`;
@@ -5342,13 +5437,15 @@ export default function App() {
       timestamp: nowMs,
       telemetryHeader,
       bubbleSubtitle,
-      images: imgs.length > 0 ? [...imgs] : undefined,
-      voiceAudio: voiceAudio || undefined,
+      images: normalizedImgs.length > 0 ? [...normalizedImgs] : undefined,
+      voiceAudio: voiceAudio
+        ? { ...voiceAudio, mimeType: normalizeAudioMimeType(voiceAudio.mimeType) }
+        : undefined,
       replyTo: replyToInfo,
     };
 
-    const previousHistory = [...messages];
-    setMessages((prev) => [...prev, userMsg]);
+    const previousHistory = Array.isArray(messages) ? [...messages] : [];
+    setMessages((prev) => [...(Array.isArray(prev) ? prev : []), userMsg]);
 
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -5365,7 +5462,7 @@ export default function App() {
       typeof incomingText === 'string'
         ? incomingText
         : (chatInputRef.current?.getText() || '');
-    const imgsToSend = [...attachedImages];
+    const imgsToSend = Array.isArray(attachedImages) ? [...attachedImages] : [];
     chatInputRef.current?.clear();
     setAttachedImages([]);
     await dispatchMessageToArgon(textToSend, imgsToSend);
@@ -8712,24 +8809,28 @@ export default function App() {
             if (currentView === 'vault') navigateToView('chat');
           }}
           onAttachItemToChat={(item) => {
-            if (item.category === 'voice_clips') {
-              const base64Data = item.dataUrl.split(',')[1] || '';
+            const base64Data = String(item.dataUrl || '').split(',')[1] || '';
+            const resolvedMime = resolveAttachmentMimeType(item.filename || '', item.mimeType);
+            const cleanMime = isAudioAttachment(resolvedMime, item.filename)
+              ? normalizeAudioMimeType(resolvedMime)
+              : resolvedMime;
+
+            if (item.category === 'voice_clips' && item.origin === 'mic_recording') {
               setPendingVoiceDraft({
                 transcript: item.description || item.filename,
                 durationSec: 1,
                 voiceAudio: {
                   data: base64Data,
-                  mimeType: item.mimeType,
+                  mimeType: cleanMime,
                   durationSec: 1,
                   filename: item.filename,
                 },
               });
             } else {
-              const base64Data = item.dataUrl.split(',')[1] || '';
               setAttachedImages((prev) => [
-                ...prev,
+                ...(Array.isArray(prev) ? prev : []),
                 {
-                  mimeType: item.mimeType,
+                  mimeType: cleanMime,
                   data: base64Data,
                   name: item.filename,
                   description: item.description,

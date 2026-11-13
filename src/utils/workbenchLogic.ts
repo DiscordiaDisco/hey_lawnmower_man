@@ -32,6 +32,11 @@ import {
   SANCTUARY_VAULT_BRANCH,
   ensureGithubBranchExists,
   isHeyLawnmowerManRuntimeStatePath,
+  normalizeInlineMediaMimeType,
+  sanitizeGeminiContents,
+  normalizeGeminiGenerateContentResult,
+  extractSafeGeminiText,
+  extractSafeGeminiFunctionCalls,
 } from '../services/gemini';
 import {
   DEFAULT_ARGON_SYS_PROMPT,
@@ -7173,7 +7178,7 @@ async function callOpenAICompatibleBrain(params: {
  * attaches live camera images, room snapshots, or recorded voice audio.
  */
 export async function runHybridGeminiPerceptionBridge(params: {
-  images?: Array<{ data: string; mimeType: string; description?: string }>;
+  images?: Array<{ data: string; mimeType: string; name?: string; description?: string }>;
   roomSnapshotDataUrl?: string | null;
   voiceAudio?: AttachedVoiceAudio | null;
   userMessageText?: string;
@@ -7185,14 +7190,26 @@ export async function runHybridGeminiPerceptionBridge(params: {
 
   if (Array.isArray(images)) {
     for (const img of images) {
-      if (img && img.data && img.mimeType) {
-        mediaParts.push({
-          inlineData: {
-            mimeType: img.mimeType,
-            data: img.data,
-          },
-        });
-        mediaLabels.push('User-attached photo/image');
+      if (!img || !img.data) continue;
+      const resolvedMime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      const finalMime = isAudioAttachment(resolvedMime, img.name)
+        ? normalizeAudioMimeType(resolvedMime)
+        : resolvedMime;
+      if (!finalMime) continue;
+      mediaParts.push({
+        inlineData: {
+          mimeType: finalMime,
+          data: img.data,
+        },
+      });
+      if (isAudioAttachment(finalMime, img.name)) {
+        mediaLabels.push(`User-attached audio file "${img.name || 'audio clip'}" (${finalMime})`);
+      } else if (isVideoAttachment(finalMime, img.name)) {
+        mediaLabels.push(`User-attached video "${img.name || 'video'}" (${finalMime})`);
+      } else if (isPdfAttachment(finalMime, img.name)) {
+        mediaLabels.push(`User-attached PDF "${img.name || 'document.pdf'}"`);
+      } else {
+        mediaLabels.push(`User-attached photo/image "${img.name || 'image'}"`);
       }
     }
   }
@@ -7206,7 +7223,7 @@ export async function runHybridGeminiPerceptionBridge(params: {
   if (voiceAudio && voiceAudio.data && voiceAudio.mimeType) {
     mediaParts.push({
       inlineData: {
-        mimeType: voiceAudio.mimeType,
+        mimeType: normalizeAudioMimeType(voiceAudio.mimeType),
         data: voiceAudio.data,
       },
     });
@@ -7268,16 +7285,18 @@ export async function runHybridGeminiPerceptionBridge(params: {
   const bridgeModels = ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-4-argon'];
   for (const bridgeModel of bridgeModels) {
     try {
-      const res = await ai.models.generateContent({
+      const safeContents = sanitizeGeminiContents([
+        {
+          role: 'user',
+          parts: [...mediaParts, { text: perceptionPrompt }],
+        },
+      ]);
+      const rawRes = await ai.models.generateContent({
         model: bridgeModel,
-        contents: [
-          {
-            role: 'user',
-            parts: [...mediaParts, { text: perceptionPrompt }],
-          },
-        ],
+        contents: safeContents,
       });
-      const text = (res.text || '').trim();
+      const res = normalizeGeminiGenerateContentResult(rawRes);
+      const text = extractSafeGeminiText(res).trim();
       if (text) {
         return text;
       }
@@ -8111,14 +8130,15 @@ export async function runFlashWebScoutSearch(params: {
 
   for (const flashModel of candidateFlashModels) {
     try {
-      const response = await ai.models.generateContent({
+      const rawResponse = await ai.models.generateContent({
         model: flashModel,
         contents: [{ role: 'user', parts: [{ text: scoutPrompt }] }],
         config: {
           tools: [{ googleSearch: {} }],
         },
       });
-      const summary = String(response.text || '').trim();
+      const response = normalizeGeminiGenerateContentResult(rawResponse);
+      const summary = extractSafeGeminiText(response).trim();
       const { sources, groundingChunks } = extractWebScoutGroundingSources(response);
       if (summary || sources.length > 0) {
         return {
@@ -8908,24 +8928,36 @@ export async function runClientStaffTask(params: {
   const preToolStaffChunks: string[] = [];
   let workingScratchpad: TicketScratchpadState = loadTicketScratchpad();
 
+  let staffFunctionCalls = extractSafeGeminiFunctionCalls(staffRes);
   while (
-    staffRes.functionCalls &&
-    staffRes.functionCalls.length > 0 &&
+    staffFunctionCalls.length > 0 &&
     staffLoop < maxStaffLoops
   ) {
     staffLoop++;
-    if (staffRes.text && staffRes.text.trim()) {
-      preToolStaffChunks.push(staffRes.text.trim());
+    const staffTurnText = extractSafeGeminiText(staffRes).trim();
+    if (staffTurnText) {
+      preToolStaffChunks.push(staffTurnText);
     }
-    const modelContent = staffRes.candidates?.[0]?.content;
-    if (modelContent) {
+    const modelContent = staffRes?.candidates?.[0]?.content;
+    if (modelContent && Array.isArray(modelContent.parts)) {
       staffContents.push(modelContent);
+    } else {
+      staffContents.push({
+        role: 'model',
+        parts: staffFunctionCalls.map((fc) => ({
+          functionCall: {
+            id: fc.id,
+            name: fc.name,
+            args: fc.args || {},
+          },
+        })),
+      });
     }
 
     const responseParts: Part[] = [];
-    for (const fnCall of staffRes.functionCalls) {
+    for (const fnCall of staffFunctionCalls) {
       const fnName = fnCall.name;
-      const args = (fnCall.args || {}) as Record<string, unknown>;
+      const args = (fnCall.args && typeof fnCall.args === 'object' ? fnCall.args : {}) as Record<string, unknown>;
       let toolResult: Record<string, unknown> = {};
 
       if (fnName === 'list_drawers' && perms.lorebook) {
@@ -9537,9 +9569,10 @@ export async function runClientStaffTask(params: {
 
     staffContents.push({ role: 'user', parts: responseParts });
     staffRes = await callStaffGenerate(staffContents);
+    staffFunctionCalls = extractSafeGeminiFunctionCalls(staffRes);
   }
 
-  const combinedRawOutput = [...preToolStaffChunks, (staffRes.text || '').trim()]
+  const combinedRawOutput = [...preToolStaffChunks, extractSafeGeminiText(staffRes).trim()]
     .filter(Boolean)
     .join('\n\n');
   const output = stripToolReceiptsFromVisibleText(
@@ -9565,7 +9598,7 @@ export async function runClientStaffTask(params: {
         customApiKey,
       });
       argonReaction = stripToolReceiptsFromVisibleText(
-        stripMergedStaffLinesFromArgonOutput((reactRes.result.text || '').trim(), [
+        stripMergedStaffLinesFromArgonOutput(extractSafeGeminiText(reactRes.result).trim(), [
           agent.name,
           'Haiku',
           'A Monkey',
@@ -10105,13 +10138,18 @@ export async function runClientChatTurn(params: {
   let gistSynced = false;
   const reactionsAdded: Array<{ messageId: string; emoji: string; user: string }> = [];
 
-  const cleanUserMessageText = stripLeakedSystemContextFromUserText(userMessageText);
+  const safeHistory = Array.isArray(history) ? history : [];
+  const safeImages = Array.isArray(images) ? images : [];
+  const safeStaffAgents = Array.isArray(staffAgents) ? staffAgents : [];
+  const safeOccultHistory = Array.isArray(occultSessionHistory) ? occultSessionHistory : [];
+
+  const cleanUserMessageText = stripLeakedSystemContextFromUserText(userMessageText || '');
 
   const recentTranscript = [
-    ...history.slice(-5).map((h) => {
+    ...safeHistory.slice(-5).map((h) => {
       const safeText =
-        h.role === 'user' ? stripLeakedSystemContextFromUserText(h.text) : h.text;
-      return `${h.role === 'user' ? 'Hex' : 'Argon'}: ${safeText}`;
+        h?.role === 'user' ? stripLeakedSystemContextFromUserText(h.text || '') : (h?.text || '');
+      return `${h?.role === 'user' ? 'Hex' : 'Argon'}: ${safeText}`;
     }),
     `Hex: ${cleanUserMessageText}`,
   ].join('\n');
@@ -10120,34 +10158,71 @@ export async function runClientChatTurn(params: {
   const contents: Content[] = [];
   const historyLimit =
     maxHistoryTurns === 'all'
-      ? Math.min(history.length, 25)
+      ? Math.min(safeHistory.length, 25)
       : typeof maxHistoryTurns === 'number'
       ? Math.min(Math.max(1, maxHistoryTurns), 25)
       : 20;
-  const effectiveHistory = history.slice(-historyLimit);
+  const effectiveHistory = safeHistory.slice(-historyLimit);
 
   const historicalToolReceiptEntries: string[] = [];
 
   for (let turnIdx = 0; turnIdx < effectiveHistory.length; turnIdx++) {
     const turn = effectiveHistory[turnIdx];
+    if (!turn) continue;
     const parts: Part[] = [];
     if (turn.images && Array.isArray(turn.images)) {
       for (let imgIdx = 0; imgIdx < turn.images.length; imgIdx++) {
         const img = turn.images[imgIdx];
+        if (!img) continue;
         const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
-        // Historical turn where base64 is stripped: freeze saved image summary permanently so historical prefix NEVER mutates!
-        const summary =
-          img.imageSummary ||
-          img.description ||
-          (img.textContent ? `Document text:\n${img.textContent.slice(0, 800)}` : '') ||
-          `Visual attachment "${img.name || 'image'}" (${mime})`;
-        parts.push({
-          text: `[SAVED IMAGE SUMMARY for "${img.name || 'image'}":\n${summary}]\n\n`,
-        });
-        if (img.description && img.description.trim() && !img.imageSummary) {
+        const sizeLabel = img.size ? `, ${Math.round(img.size / 1024)} KB` : '';
+        if (isAudioAttachment(mime, img.name)) {
+          const cleanAudioMime = normalizeAudioMimeType(mime);
+          const audioNote =
+            img.description && img.description.trim()
+              ? `${img.description.trim()} (${cleanAudioMime}${sizeLabel})`
+              : `Previous audio attachment "${img.name || 'audio clip'}" (${cleanAudioMime}${sizeLabel})`;
           parts.push({
-            text: `[Attached Description: ${img.description.trim()}]\n\n`,
+            text: `[SAVED AUDIO ATTACHMENT for "${img.name || 'audio clip'}": ${audioNote}]\n\n`,
           });
+        } else if (isVideoAttachment(mime, img.name)) {
+          const videoNote =
+            img.description && img.description.trim()
+              ? `${img.description.trim()} (${mime}${sizeLabel})`
+              : `Previous video attachment "${img.name || 'video'}" (${mime}${sizeLabel})`;
+          parts.push({
+            text: `[SAVED VIDEO ATTACHMENT for "${img.name || 'video'}": ${videoNote}]\n\n`,
+          });
+        } else if (isPdfAttachment(mime, img.name)) {
+          const pdfNote =
+            img.description && img.description.trim()
+              ? `${img.description.trim()} (application/pdf${sizeLabel})`
+              : `Previous PDF document "${img.name || 'document.pdf'}" (application/pdf${sizeLabel})`;
+          parts.push({
+            text: `[SAVED PDF ATTACHMENT for "${img.name || 'document.pdf'}": ${pdfNote}]\n\n`,
+          });
+        } else if (img.textContent || isTextDocAttachment(mime, img.name)) {
+          const docSummary =
+            (img.textContent ? `Document excerpt:\n${img.textContent.slice(0, 800)}` : '') ||
+            img.description ||
+            `Text document "${img.name || 'document'}" (${mime}${sizeLabel})`;
+          parts.push({
+            text: `[SAVED DOCUMENT ATTACHMENT for "${img.name || 'document'}":\n${docSummary}]\n\n`,
+          });
+        } else {
+          // Historical image turn where base64 is stripped: freeze saved image summary permanently so historical prefix NEVER mutates!
+          const summary =
+            img.imageSummary ||
+            img.description ||
+            `Visual attachment "${img.name || 'image'}" (${mime})`;
+          parts.push({
+            text: `[SAVED IMAGE SUMMARY for "${img.name || 'image'}":\n${summary}]\n\n`,
+          });
+          if (img.description && img.description.trim() && !img.imageSummary) {
+            parts.push({
+              text: `[Attached Description: ${img.description.trim()}]\n\n`,
+            });
+          }
         }
       }
     }
@@ -10192,12 +10267,15 @@ export async function runClientChatTurn(params: {
 
   const currentParts: Part[] = [];
   const attachedDescriptions: string[] = [];
-  if (images && Array.isArray(images)) {
-    for (const img of images) {
+  if (safeImages.length > 0) {
+    for (let curImgIdx = 0; curImgIdx < safeImages.length; curImgIdx++) {
+      const img = safeImages[curImgIdx];
+      if (!img) continue;
       const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
       if (isAudioAttachment(mime, img.name)) {
         const cleanMime = normalizeAudioMimeType(mime);
         if (img.data) {
+          storeSessionImage(`current_${curImgIdx}`, img.data, cleanMime);
           currentParts.push({
             inlineData: {
               mimeType: cleanMime,
@@ -10210,7 +10288,7 @@ export async function runClientChatTurn(params: {
         attachedDescriptions.push(`Hex attached sound file "${img.name || 'audio clip'}" (${cleanMime})`);
       } else if (isVideoAttachment(mime, img.name)) {
         if (img.data) {
-          storeSessionImage(`current_${images.indexOf(img)}`, img.data, mime);
+          storeSessionImage(`current_${curImgIdx}`, img.data, mime);
           currentParts.push({
             inlineData: {
               mimeType: mime,
@@ -10330,18 +10408,18 @@ export async function runClientChatTurn(params: {
     cleanUserMessageText.includes('CONTROLLER: BZZT!') ||
     cleanUserMessageText.toLowerCase().includes('prank shock collar');
   const shockCollarTotalCount = isShockCollarTurn
-    ? history.filter(
+    ? safeHistory.filter(
         (h) =>
-          h.role === 'user' &&
-          (h.text.includes('CONTROLLER: BZZT!') ||
-            h.text.toLowerCase().includes('prank shock collar'))
+          h?.role === 'user' &&
+          (String(h.text || '').includes('CONTROLLER: BZZT!') ||
+            String(h.text || '').toLowerCase().includes('prank shock collar'))
       ).length + 1
     : 0;
 
   // Hybrid Vision/Audio Perception Bridge when Argon is running on DeepSeek, GLM, or Kimi Direct
   const activeBrainRoute = resolveBrainEngineRoute(params.model || 'gemini-4-argon');
   const hasTurnMediaForBridge =
-    (Array.isArray(images) && images.some((img) => Boolean(img && img.data && img.mimeType))) ||
+    safeImages.some((img) => Boolean(img && img.data && (img.mimeType || img.name))) ||
     Boolean(roomSnapInline) ||
     Boolean(voiceAudio && voiceAudio.data && voiceAudio.mimeType);
 
@@ -10353,7 +10431,7 @@ export async function runClientChatTurn(params: {
     hasTurnMediaForBridge
   ) {
     const bridgePerception = await runHybridGeminiPerceptionBridge({
-      images,
+      images: safeImages,
       roomSnapshotDataUrl,
       voiceAudio,
       userMessageText: cleanUserMessageText,
@@ -10425,7 +10503,7 @@ export async function runClientChatTurn(params: {
     const hiddenVisionAndStaff = buildHiddenAvatarAndStaffContext({
       argonAvatarMode: workingAvatarMode,
       hexAvatarDesc,
-      staffAgents,
+      staffAgents: safeStaffAgents,
     });
     const journalsContext = buildJournalsSystemContext(workingArgonBook, workingHexBook);
     const dynamicDrawersBlock = getDynamicTriggeredLorebookDrawersBlock(
@@ -10436,7 +10514,7 @@ export async function runClientChatTurn(params: {
       currentRoomStateSummary,
       scratchpad: workingScratchpad,
       uiBreadcrumbsText,
-      occultSessionHistory,
+      occultSessionHistory: safeOccultHistory,
       liveParlorStateSummary,
       shockCollarTotalCount,
       bridgeModel: activeBrainRoute.model,
@@ -10539,9 +10617,9 @@ export async function runClientChatTurn(params: {
   const preToolArgonTexts: string[] = [];
   const turnToolSummaries: string[] = [];
 
+  let responseFunctionCalls = extractSafeGeminiFunctionCalls(response);
   while (
-    response.functionCalls &&
-    response.functionCalls.length > 0 &&
+    responseFunctionCalls.length > 0 &&
     loopCount < maxToolLoops
   ) {
     if (abortSignal?.aborted) {
@@ -10554,11 +10632,12 @@ export async function runClientChatTurn(params: {
       break;
     }
     loopCount++;
-    if (response.text && response.text.trim()) {
+    const currentResponseText = extractSafeGeminiText(response).trim();
+    if (currentResponseText) {
       const cleanPre = stripToolReceiptsFromVisibleText(
         stripMergedStaffLinesFromArgonOutput(
-          response.text.trim(),
-          staffAgents.map((a) => a.name)
+          currentResponseText,
+          safeStaffAgents.map((a) => a.name)
         )
       );
       if (cleanPre) {
@@ -10569,13 +10648,13 @@ export async function runClientChatTurn(params: {
         });
       }
     }
-    const modelContent = response.candidates?.[0]?.content;
-    if (modelContent) {
+    const modelContent = response?.candidates?.[0]?.content;
+    if (modelContent && Array.isArray(modelContent.parts)) {
       contents.push(modelContent);
     } else {
       contents.push({
         role: 'model',
-        parts: response.functionCalls.map((fc: any) => ({
+        parts: responseFunctionCalls.map((fc) => ({
           functionCall: {
             id: fc.id,
             name: fc.name,
@@ -10587,9 +10666,9 @@ export async function runClientChatTurn(params: {
 
     const responseParts: Part[] = [];
 
-    for (const fnCall of response.functionCalls) {
+    for (const fnCall of responseFunctionCalls) {
       const fnName = fnCall.name;
-      const args = (fnCall.args || {}) as Record<string, unknown>;
+      const args = (fnCall.args && typeof fnCall.args === 'object' ? fnCall.args : {}) as Record<string, unknown>;
       let toolResult: Record<string, unknown> = {};
 
       if (fnName === 'list_drawers') {
@@ -11657,7 +11736,8 @@ export async function runClientChatTurn(params: {
           try {
             if (typeof localStorage !== 'undefined') {
               const raw = localStorage.getItem('argon_creepy_shrine_v1');
-              if (raw) shrineTokens = JSON.parse(raw);
+              const parsed = raw ? JSON.parse(raw) : [];
+              shrineTokens = Array.isArray(parsed) ? parsed : [];
             }
           } catch { shrineTokens = []; }
           const newToken = {
@@ -11667,7 +11747,7 @@ export async function runClientChatTurn(params: {
             label: label || (type === 'quote' ? 'Sacred Whispered Word' : type === 'image' ? 'Votive Icon' : 'Altar Relic'),
             timestamp: Date.now(),
           };
-          const updatedTokens = [newToken, ...shrineTokens];
+          const updatedTokens = [newToken, ...(Array.isArray(shrineTokens) ? shrineTokens : [])];
           if (typeof localStorage !== 'undefined') {
             localStorage.setItem('argon_creepy_shrine_v1', JSON.stringify(updatedTokens));
           }
@@ -11750,18 +11830,33 @@ export async function runClientChatTurn(params: {
       parts: normalizeContentPartsSpacing(responseParts),
     });
 
-    // Replace heavy inlineData parts in EARLIER turns with saved image summaries so follow-up tool turns
-    // never double-send initial turn base64 images, while preserving any freshly captured tool snapshot in the latest turn
+    // Replace heavy inlineData parts in EARLIER turns with modality-accurate saved notes so follow-up tool turns
+    // never double-send initial turn base64 payloads, while preserving any freshly captured tool snapshot in the latest turn
     for (let cIdx = 0; cIdx < contents.length - 1; cIdx++) {
       const c = contents[cIdx];
       if (c && c.role === 'user' && Array.isArray(c.parts)) {
         let mutated = false;
         for (let pIdx = 0; pIdx < c.parts.length; pIdx++) {
           const part = c.parts[pIdx];
-          if ((part as any).inlineData) {
-            c.parts[pIdx] = {
-              text: `[SAVED IMAGE SUMMARY: Visual contents previously inspected by model in turn 1]\n\n`,
-            };
+          const inlineMime = String((part as any)?.inlineData?.mimeType || '').toLowerCase();
+          if ((part as any)?.inlineData) {
+            if (inlineMime.startsWith('audio/')) {
+              c.parts[pIdx] = {
+                text: `[SAVED AUDIO ATTACHMENT: Audio clip previously heard in turn 1 (${inlineMime})]\n\n`,
+              };
+            } else if (inlineMime.startsWith('video/')) {
+              c.parts[pIdx] = {
+                text: `[SAVED VIDEO ATTACHMENT: Video clip previously watched in turn 1 (${inlineMime})]\n\n`,
+              };
+            } else if (inlineMime === 'application/pdf') {
+              c.parts[pIdx] = {
+                text: `[SAVED PDF ATTACHMENT: PDF document previously read in turn 1]\n\n`,
+              };
+            } else {
+              c.parts[pIdx] = {
+                text: `[SAVED IMAGE SUMMARY: Visual contents previously inspected by model in turn 1]\n\n`,
+              };
+            }
             mutated = true;
           }
         }
@@ -11782,11 +11877,12 @@ export async function runClientChatTurn(params: {
     }
 
     response = await callGenerate(contents);
+    responseFunctionCalls = extractSafeGeminiFunctionCalls(response);
   }
 
-  const allStaffNames = staffAgents.map((a) => a.name);
+  const allStaffNames = safeStaffAgents.map((a) => a.name);
   let postToolArgonText = stripToolReceiptsFromVisibleText(
-    stripMergedStaffLinesFromArgonOutput((response.text || '').trim(), allStaffNames)
+    stripMergedStaffLinesFromArgonOutput(extractSafeGeminiText(response).trim(), allStaffNames)
   );
   const preStaffArgonText = stripToolReceiptsFromVisibleText(
     preToolArgonTexts.filter(Boolean).join('\n\n').trim()
@@ -11825,12 +11921,10 @@ export async function runClientChatTurn(params: {
         thinkingLevel,
       });
 
-      if (synthesisRes.result?.text) {
+      const synthText = extractSafeGeminiText(synthesisRes.result).trim();
+      if (synthText) {
         postToolArgonText = stripToolReceiptsFromVisibleText(
-          stripMergedStaffLinesFromArgonOutput(
-            synthesisRes.result.text.trim(),
-            allStaffNames
-          )
+          stripMergedStaffLinesFromArgonOutput(synthText, allStaffNames)
         );
       }
     } catch (synthErr) {
@@ -11881,7 +11975,7 @@ export async function runClientChatTurn(params: {
         });
         argonStaffFollowUp = stripToolReceiptsFromVisibleText(
           stripMergedStaffLinesFromArgonOutput(
-            (reactRes.result.text || '').trim(),
+            extractSafeGeminiText(reactRes.result).trim(),
             allStaffNames
           )
         );
@@ -13528,29 +13622,22 @@ export async function runClientImageGenerator(params: {
 }
 
 export function normalizeAudioMimeType(rawMime?: string | null): string {
-  const cleaned = String(rawMime || '')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
+  const cleaned = normalizeInlineMediaMimeType(rawMime);
+  if (!cleaned) return 'audio/webm';
   if (
     cleaned === 'audio/webm' ||
     cleaned === 'audio/mp4' ||
     cleaned === 'audio/mpeg' ||
-    cleaned === 'audio/mp3' ||
     cleaned === 'audio/wav' ||
-    cleaned === 'audio/x-wav' ||
     cleaned === 'audio/ogg' ||
     cleaned === 'audio/aac' ||
     cleaned === 'audio/flac'
   ) {
-    return cleaned === 'audio/mp3'
-      ? 'audio/mpeg'
-      : cleaned === 'audio/x-wav'
-      ? 'audio/wav'
-      : cleaned;
+    return cleaned;
   }
   if (cleaned === 'video/webm') return 'audio/webm';
   if (cleaned === 'video/mp4') return 'audio/mp4';
+  if (cleaned.includes('m4a')) return 'audio/mp4';
   return 'audio/webm';
 }
 
@@ -13558,8 +13645,21 @@ export function normalizeAudioMimeType(rawMime?: string | null): string {
  * Resolves exact MIME type for images, video clips, audio clips, PDFs, or documents based on file name extension and browser MIME.
  */
 export function resolveAttachmentMimeType(fileName: string, rawMime?: string | null): string {
-  const ext = (fileName.split('.').pop() || '').toLowerCase();
+  const safeName = String(fileName || '');
+  const ext = (safeName.split('.').pop() || '').toLowerCase();
   const raw = String(rawMime || '').split(';')[0].trim().toLowerCase();
+
+  // Audio .m4a must ALWAYS normalize to 'audio/mp4' (even if browser labels it 'video/mp4', 'audio/m4a', or 'audio/x-m4a')
+  if (
+    ext === 'm4a' ||
+    raw === 'audio/m4a' ||
+    raw === 'audio/x-m4a' ||
+    raw === 'audio/mp4a-latm' ||
+    raw === 'audio/x-mp4' ||
+    raw === 'audio/mp4'
+  ) {
+    return 'audio/mp4';
+  }
 
   // Video formats: .mp4, .webm, .mov, .m4v, .mkv
   if (ext === 'mp4' || raw === 'video/mp4') return 'video/mp4';
@@ -13569,11 +13669,10 @@ export function resolveAttachmentMimeType(fileName: string, rawMime?: string | n
   if (ext === 'webm' && (raw.startsWith('video/') || raw === 'video/webm')) return 'video/webm';
   if (raw.startsWith('video/')) return raw;
 
-  // Audio formats: .mp3, .wav, .ogg, .m4a, .aac, .webm, .flac
+  // Audio formats: .mp3, .wav, .ogg, .aac, .webm, .flac
   if (ext === 'mp3') return 'audio/mpeg';
   if (ext === 'wav') return 'audio/wav';
   if (ext === 'ogg') return 'audio/ogg';
-  if (ext === 'm4a') return 'audio/m4a';
   if (ext === 'aac') return 'audio/aac';
   if (ext === 'flac') return 'audio/flac';
   if (ext === 'webm' && (raw.startsWith('audio/') || !raw.startsWith('video/'))) return 'audio/webm';
@@ -13597,29 +13696,39 @@ export function resolveAttachmentMimeType(fileName: string, rawMime?: string | n
 }
 
 export function isVideoAttachment(mimeType: string, fileName = ''): boolean {
-  const normMime = (mimeType || '').toLowerCase();
-  const normName = (fileName || '').toLowerCase();
+  const normMime = String(mimeType || '').toLowerCase();
+  const normName = String(fileName || '').toLowerCase();
+  if (/\.m4a$/i.test(normName) || normMime === 'audio/mp4' || normMime === 'audio/m4a' || normMime === 'audio/x-m4a') {
+    return false;
+  }
   if (normMime.startsWith('video/')) return true;
   return /\.(mp4|webm|mov|m4v|mkv)$/i.test(normName);
 }
 
 export function isAudioAttachment(mimeType: string, fileName = ''): boolean {
-  if (mimeType.startsWith('video/')) return false;
-  if (mimeType.startsWith('audio/')) return true;
-  if (/\.webm$/i.test(fileName)) {
-    return !mimeType.startsWith('video/');
+  const normMime = String(mimeType || '').toLowerCase();
+  const normName = String(fileName || '');
+  if (/\.m4a$/i.test(normName)) return true;
+  if (normMime.startsWith('video/')) return false;
+  if (normMime.startsWith('audio/')) return true;
+  if (/\.webm$/i.test(normName)) {
+    return !normMime.startsWith('video/');
   }
-  return /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(fileName);
+  return /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(normName);
 }
 
 export function isTextDocAttachment(mimeType: string, fileName = ''): boolean {
-  if (mimeType.startsWith('text/') || mimeType === 'application/json' || mimeType === 'text/csv') return true;
-  return /\.(txt|md|json|csv|py|js|ts|tsx|jsx|html|css|yaml|yml)$/i.test(fileName);
+  const normMime = String(mimeType || '').toLowerCase();
+  const normName = String(fileName || '');
+  if (normMime.startsWith('text/') || normMime === 'application/json' || normMime === 'text/csv') return true;
+  return /\.(txt|md|json|csv|py|js|ts|tsx|jsx|html|css|yaml|yml)$/i.test(normName);
 }
 
 export function isPdfAttachment(mimeType: string, fileName = ''): boolean {
-  if (mimeType === 'application/pdf') return true;
-  return /\.pdf$/i.test(fileName);
+  const normMime = String(mimeType || '').toLowerCase();
+  const normName = String(fileName || '');
+  if (normMime === 'application/pdf') return true;
+  return /\.pdf$/i.test(normName);
 }
 
 export async function runClientAudioTranscribe(params: {
@@ -13648,11 +13757,12 @@ export async function runClientAudioTranscribe(params: {
 
   try {
     const ai = createClientGenAI(customApiKey);
-    const transcribeRes = await ai.models.generateContent({
+    const rawTranscribeRes = await ai.models.generateContent({
       model: 'gemini-3.5-transcribe',
-      contents,
+      contents: sanitizeGeminiContents(contents),
     });
-    const text = (transcribeRes.text || '').trim();
+    const transcribeRes = normalizeGeminiGenerateContentResult(rawTranscribeRes);
+    const text = extractSafeGeminiText(transcribeRes).trim();
     if (text) return text;
   } catch {
     // Fall back to standard multimodal models below
@@ -13663,7 +13773,7 @@ export async function runClientAudioTranscribe(params: {
     contents,
     customApiKey,
   });
-  return (result.text || '').trim();
+  return extractSafeGeminiText(result).trim();
 }
 
 // ============================================================================
@@ -15419,12 +15529,16 @@ export async function addMediaVaultItem(
     return { item: existing, isDuplicate: true };
   }
 
-  const category = item.category || detectMediaCategory(item.mimeType, item.filename);
+  const resolvedMime = resolveAttachmentMimeType(item.filename, item.mimeType);
+  const normalizedMime = isAudioAttachment(resolvedMime, item.filename)
+    ? normalizeAudioMimeType(resolvedMime)
+    : resolvedMime;
+  const category = item.category || detectMediaCategory(normalizedMime, item.filename);
   const newItem: MediaVaultItem = {
     id: item.id || `vault-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     filename: item.filename,
     category,
-    mimeType: item.mimeType || 'application/octet-stream',
+    mimeType: normalizedMime || 'application/octet-stream',
     size: item.size || (item.dataUrl ? Math.round((item.dataUrl.length * 3) / 4) : 0),
     createdAt: item.createdAt || Date.now(),
     origin: item.origin || 'chat_upload',
@@ -15435,7 +15549,7 @@ export async function addMediaVaultItem(
   };
 
   const currentVault = await loadMediaVault();
-  const updated = [newItem, ...currentVault];
+  const updated = [newItem, ...(Array.isArray(currentVault) ? currentVault : [])];
   await saveMediaVault(updated);
 
   // Background sync to linked phone folder if permission granted
@@ -16587,9 +16701,20 @@ export async function generateImageSummaryAndOcr(params: {
   const { base64Data, mimeType, customApiKey, filename, abortSignal } = params;
   if (!base64Data) return '';
 
+  const resolvedMime = resolveAttachmentMimeType(filename || '', mimeType);
+  if (
+    isAudioAttachment(resolvedMime, filename) ||
+    isVideoAttachment(resolvedMime, filename) ||
+    isPdfAttachment(resolvedMime, filename) ||
+    isTextDocAttachment(resolvedMime, filename) ||
+    !resolvedMime.startsWith('image/')
+  ) {
+    return '';
+  }
+
   const apiKey = resolveHouseGeminiApiKey(customApiKey);
   if (!apiKey) {
-    return `Attached image "${filename || 'screenshot'}" (${mimeType}). OCR: (API key offline).`;
+    return `Attached image "${filename || 'screenshot'}" (${resolvedMime}). OCR: (API key offline).`;
   }
 
   try {
@@ -16600,7 +16725,7 @@ export async function generateImageSummaryAndOcr(params: {
     const onAbort = () => timeoutCtrl.abort();
     abortSignal?.addEventListener('abort', onAbort);
 
-    const res = await ai.models.generateContent({
+    const rawRes = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: [
         {
@@ -16609,7 +16734,7 @@ export async function generateImageSummaryAndOcr(params: {
             {
               inlineData: {
                 data: base64Data,
-                mimeType: mimeType || 'image/jpeg',
+                mimeType: resolvedMime || 'image/jpeg',
               },
             },
             {
@@ -16629,7 +16754,8 @@ Keep the output structured, dense, and factual so a model reading this in place 
     clearTimeout(timer);
     abortSignal?.removeEventListener('abort', onAbort);
 
-    const summaryText = res.text?.trim();
+    const res = normalizeGeminiGenerateContentResult(rawRes);
+    const summaryText = extractSafeGeminiText(res).trim();
     if (summaryText) {
       return summaryText;
     }
@@ -16637,7 +16763,7 @@ Keep the output structured, dense, and factual so a model reading this in place 
     console.warn('[generateImageSummaryAndOcr] Vision summary fallback:', err);
   }
 
-  return `Attached image "${filename || 'screenshot'}" (${mimeType}). Size: ${Math.round((base64Data.length * 3) / 4 / 1024)} KB.`;
+  return `Attached image "${filename || 'screenshot'}" (${resolvedMime}). Size: ${Math.round((base64Data.length * 3) / 4 / 1024)} KB.`;
 }
 
 /**

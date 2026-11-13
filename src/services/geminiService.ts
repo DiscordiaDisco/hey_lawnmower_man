@@ -123,8 +123,237 @@ export function sanitizeGeminiConfig(
 }
 
 /**
+ * Normalizes audio/media MIME types for Gemini inlineData (maps .m4a variants to 'audio/mp4').
+ */
+export function normalizeInlineMediaMimeType(rawMime?: string | null): string {
+  const cleaned = String(rawMime || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (!cleaned) return '';
+  if (
+    cleaned === 'audio/m4a' ||
+    cleaned === 'audio/x-m4a' ||
+    cleaned === 'audio/mp4a-latm' ||
+    cleaned === 'audio/x-mp4' ||
+    cleaned === 'audio/mp4'
+  ) {
+    return 'audio/mp4';
+  }
+  if (cleaned === 'audio/mp3' || cleaned === 'audio/mpeg3' || cleaned === 'audio/x-mpeg') {
+    return 'audio/mpeg';
+  }
+  if (cleaned === 'audio/x-wav' || cleaned === 'audio/wave') {
+    return 'audio/wav';
+  }
+  return cleaned;
+}
+
+/**
+ * Safely sanitizes Gemini `contents` before calling `@google/genai` so non-array `parts`,
+ * null entries, or unnormalized `.m4a` (`audio/m4a` / `audio/x-m4a`) `inlineData` MIME types
+ * never trigger `<id> is not iterable` or 400 MIME errors.
+ */
+export function sanitizeGeminiContents(
+  contents: Content[] | Content | Part[] | string | Array<{ role: string; parts: Part[] }>
+): Content[] {
+  if (typeof contents === 'string') {
+    return contents ? [{ role: 'user', parts: [{ text: contents }] }] : [];
+  }
+  const list: unknown[] = Array.isArray(contents)
+    ? contents
+    : contents && typeof contents === 'object'
+    ? [contents]
+    : [];
+  if (list.length === 0) return [];
+
+  const isPartLike = (obj: unknown): obj is Part =>
+    Boolean(
+      obj &&
+        typeof obj === 'object' &&
+        !('parts' in (obj as Record<string, unknown>)) &&
+        ('text' in (obj as Record<string, unknown>) ||
+          'inlineData' in (obj as Record<string, unknown>) ||
+          'functionCall' in (obj as Record<string, unknown>) ||
+          'functionResponse' in (obj as Record<string, unknown>) ||
+          'fileData' in (obj as Record<string, unknown>))
+    );
+
+  const normalizePart = (rawPart: unknown): Part | null => {
+    if (typeof rawPart === 'string') {
+      return { text: rawPart };
+    }
+    if (!rawPart || typeof rawPart !== 'object') return null;
+    const p = rawPart as Record<string, unknown>;
+    if (p.inlineData && typeof p.inlineData === 'object') {
+      const idata = p.inlineData as { mimeType?: unknown; data?: unknown };
+      const rawMime = typeof idata.mimeType === 'string' ? idata.mimeType : '';
+      const normMime = normalizeInlineMediaMimeType(rawMime) || 'application/octet-stream';
+      const dataStr = typeof idata.data === 'string' ? idata.data : '';
+      if (!dataStr) return null;
+      return {
+        ...p,
+        inlineData: {
+          mimeType: normMime,
+          data: dataStr,
+        },
+      } as Part;
+    }
+    return rawPart as Part;
+  };
+
+  if (list.every((item) => typeof item === 'string' || isPartLike(item))) {
+    const cleanParts = list.map(normalizePart).filter((p): p is Part => p !== null);
+    return cleanParts.length > 0 ? [{ role: 'user', parts: cleanParts }] : [];
+  }
+
+  const normalizedContents: Content[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const c = item as { role?: unknown; parts?: unknown };
+    const rawParts = Array.isArray(c.parts)
+      ? c.parts
+      : c.parts && typeof c.parts === 'object'
+      ? [c.parts]
+      : [];
+    const cleanParts = rawParts.map(normalizePart).filter((p): p is Part => p !== null);
+    if (cleanParts.length === 0) continue;
+    normalizedContents.push({
+      ...(item as Record<string, unknown>),
+      role: c.role === 'model' ? 'model' : 'user',
+      parts: cleanParts,
+    } as Content);
+  }
+  return normalizedContents;
+}
+
+/**
+ * Safely extracts plain non-thought text from any `GenerateContentResponse`-like object
+ * without risking `@google/genai`'s unguarded `for (const part of parts ?? [])` iteration error.
+ */
+export function extractSafeGeminiText(response: unknown): string {
+  if (!response || typeof response !== 'object') return '';
+  const resp = response as Record<string, unknown>;
+  const candidates = Array.isArray(resp.candidates) ? resp.candidates : [];
+  if (candidates.length > 0) {
+    const first = candidates[0] as { content?: { parts?: unknown } } | undefined;
+    const parts = first?.content?.parts;
+    if (Array.isArray(parts)) {
+      let out = '';
+      let sawText = false;
+      for (const p of parts) {
+        if (!p || typeof p !== 'object') continue;
+        const part = p as { text?: unknown; thought?: unknown };
+        if (typeof part.text === 'string') {
+          if (part.thought === true) continue;
+          sawText = true;
+          out += part.text;
+        }
+      }
+      if (sawText) return out;
+    }
+  }
+  try {
+    const directText = (resp as { text?: unknown }).text;
+    return typeof directText === 'string' ? directText : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Safely extracts `functionCall` entries from any `GenerateContentResponse`-like object
+ * without throwing if `candidates`, `parts`, or `functionCalls` are malformed/non-iterable.
+ */
+export function extractSafeGeminiFunctionCalls(
+  response: unknown
+): Array<{ id?: string; name: string; args: Record<string, unknown> }> {
+  if (!response || typeof response !== 'object') return [];
+  const resp = response as Record<string, unknown>;
+  const candidates = Array.isArray(resp.candidates) ? resp.candidates : [];
+  if (candidates.length > 0) {
+    const first = candidates[0] as { content?: { parts?: unknown } } | undefined;
+    const parts = first?.content?.parts;
+    if (Array.isArray(parts)) {
+      const calls: Array<{ id?: string; name: string; args: Record<string, unknown> }> = [];
+      for (const p of parts) {
+        if (!p || typeof p !== 'object') continue;
+        const fc = (p as { functionCall?: unknown }).functionCall;
+        if (fc && typeof fc === 'object' && typeof (fc as { name?: unknown }).name === 'string') {
+          const fcObj = fc as { id?: unknown; name: string; args?: unknown };
+          calls.push({
+            ...(typeof fcObj.id === 'string' ? { id: fcObj.id } : {}),
+            name: fcObj.name,
+            args:
+              fcObj.args && typeof fcObj.args === 'object' && !Array.isArray(fcObj.args)
+                ? (fcObj.args as Record<string, unknown>)
+                : {},
+          });
+        }
+      }
+      if (calls.length > 0) return calls;
+    }
+  }
+  try {
+    const directCalls = (resp as { functionCalls?: unknown }).functionCalls;
+    if (Array.isArray(directCalls)) {
+      return directCalls.filter(
+        (fc): fc is { id?: string; name: string; args: Record<string, unknown> } =>
+          Boolean(fc && typeof fc === 'object' && typeof (fc as { name?: unknown }).name === 'string')
+      );
+    }
+  } catch {
+    // ignore getter failure on malformed candidate parts
+  }
+  return [];
+}
+
+/**
+ * Normalizes a `GenerateContentResponse` so `.candidates` and `.content.parts` are strictly arrays
+ * and `.text` / `.functionCalls` never throw `is not iterable` when consumed downstream.
+ */
+export function normalizeGeminiGenerateContentResult<T>(rawResult: T): T {
+  if (!rawResult || typeof rawResult !== 'object') return rawResult;
+  const obj = rawResult as Record<string, unknown>;
+  if ('candidates' in obj) {
+    const rawCands = Array.isArray(obj.candidates)
+      ? obj.candidates
+      : obj.candidates && typeof obj.candidates === 'object'
+      ? [obj.candidates]
+      : [];
+    const safeCands = rawCands
+      .filter((c): c is Record<string, unknown> => Boolean(c && typeof c === 'object'))
+      .map((c) => {
+        if (c.content && typeof c.content === 'object') {
+          const contentObj = c.content as Record<string, unknown>;
+          const rawParts = Array.isArray(contentObj.parts)
+            ? contentObj.parts
+            : contentObj.parts && typeof contentObj.parts === 'object'
+            ? [contentObj.parts]
+            : [];
+          return {
+            ...c,
+            content: {
+              ...contentObj,
+              parts: rawParts.filter((p) => Boolean(p && typeof p === 'object')),
+            },
+          };
+        }
+        return c;
+      });
+    try {
+      obj.candidates = safeCands;
+    } catch {
+      // ignore if frozen
+    }
+  }
+  return rawResult;
+}
+
+/**
  * Wraps ai.models.generateContent ensuring thinkingConfig is passed according to official specs,
- * stripping temperature/topP/topK on gemini-4-argon / Gemini 3+, and capturing un-fakeable metadata.
+ * stripping temperature/topP/topK on gemini-4-argon / Gemini 3+, sanitizing multimodal contents/tools,
+ * and capturing un-fakeable metadata.
  */
 export async function executeGeminiGenerateContent(params: {
   ai: GoogleGenAI;
@@ -148,6 +377,23 @@ export async function executeGeminiGenerateContent(params: {
   const isGemini3Or4 = isGemini3Or4Model(model);
   const levelStr = thinkingUsed.toLowerCase();
 
+  if ('tools' in cleanConfig) {
+    const rawTools = (cleanConfig as { tools?: unknown }).tools;
+    if (Array.isArray(rawTools)) {
+      cleanConfig.tools = rawTools
+        .filter((t) => Boolean(t && typeof t === 'object'))
+        .map((t) => {
+          const toolObj = t as Record<string, unknown>;
+          if ('functionDeclarations' in toolObj && !Array.isArray(toolObj.functionDeclarations)) {
+            return { ...toolObj, functionDeclarations: [] };
+          }
+          return toolObj;
+        });
+    } else if (rawTools != null) {
+      delete cleanConfig.tools;
+    }
+  }
+
   const finalConfig: Record<string, unknown> = {
     ...cleanConfig,
     thinkingConfig: (isGemini3Or4 ? { thinkingLevel: levelStr } : thinkingConfig) as any,
@@ -160,11 +406,16 @@ export async function executeGeminiGenerateContent(params: {
     };
   }
 
-  const result = await ai.models.generateContent({
+  const sanitizedContents = sanitizeGeminiContents(contents);
+  const effectiveContents =
+    sanitizedContents.length > 0 ? sanitizedContents : (contents as any);
+
+  const rawResult = await ai.models.generateContent({
     model,
-    contents: contents as any,
+    contents: effectiveContents as any,
     config: finalConfig as any,
   });
+  const result = normalizeGeminiGenerateContentResult(rawResult);
 
   const modelVersion =
     (result as any)?.modelVersion ||
@@ -230,6 +481,15 @@ export async function executeGeminiGenerateContentStream(params: {
   const isGemini3Or4 = isGemini3Or4Model(model);
   const levelStr = thinkingUsed.toLowerCase();
 
+  if ('tools' in cleanConfig) {
+    const rawTools = (cleanConfig as { tools?: unknown }).tools;
+    if (Array.isArray(rawTools)) {
+      cleanConfig.tools = rawTools.filter((t) => Boolean(t && typeof t === 'object'));
+    } else if (rawTools != null) {
+      delete cleanConfig.tools;
+    }
+  }
+
   const finalConfig: Record<string, unknown> = {
     ...cleanConfig,
     thinkingConfig: (isGemini3Or4 ? { thinkingLevel: levelStr } : thinkingConfig) as any,
@@ -242,9 +502,13 @@ export async function executeGeminiGenerateContentStream(params: {
     };
   }
 
+  const sanitizedContents = sanitizeGeminiContents(contents);
+  const effectiveContents =
+    sanitizedContents.length > 0 ? sanitizedContents : (contents as any);
+
   const stream = await ai.models.generateContentStream({
     model,
-    contents: contents as any,
+    contents: effectiveContents as any,
     config: finalConfig as any,
   });
 

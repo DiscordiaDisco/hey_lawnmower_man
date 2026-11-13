@@ -1144,6 +1144,8 @@ test('Unlimited Sticker Library appends multiple packs and individual PNGs witho
 test('Per-Message Token Counter, Full API Payload Estimator, Context Payload Pill, and Audio MIME normalizer work accurately', () => {
   assert.equal(normalizeAudioMimeType('audio/webm;codecs=opus'), 'audio/webm');
   assert.equal(normalizeAudioMimeType('audio/mp4; codecs="mp4a.40.2"'), 'audio/mp4');
+  assert.equal(normalizeAudioMimeType('audio/m4a'), 'audio/mp4');
+  assert.equal(normalizeAudioMimeType('audio/x-m4a'), 'audio/mp4');
   assert.equal(normalizeAudioMimeType('audio/mp3'), 'audio/mpeg');
   assert.equal(normalizeAudioMimeType(''), 'audio/webm');
 
@@ -1910,11 +1912,15 @@ test('Universal Multimodal File & Audio Attachment system resolves mime types, d
   assert.equal(resolveAttachmentMimeType('song.mp3'), 'audio/mpeg');
   assert.equal(resolveAttachmentMimeType('track.wav'), 'audio/wav');
   assert.equal(resolveAttachmentMimeType('voice.ogg'), 'audio/ogg');
-  assert.equal(resolveAttachmentMimeType('recording.m4a'), 'audio/m4a');
+  assert.equal(resolveAttachmentMimeType('recording.m4a'), 'audio/mp4');
+  assert.equal(resolveAttachmentMimeType('Tidal Lock.m4a', 'audio/x-m4a'), 'audio/mp4');
+  assert.equal(resolveAttachmentMimeType('Tidal Lock.m4a', 'video/mp4'), 'audio/mp4');
   assert.equal(resolveAttachmentMimeType('chime.aac'), 'audio/aac');
   assert.equal(resolveAttachmentMimeType('ambient.webm', 'audio/webm'), 'audio/webm');
   assert.ok(isAudioAttachment('audio/mpeg', 'song.mp3'));
   assert.ok(isAudioAttachment('audio/wav', 'track.wav'));
+  assert.ok(isAudioAttachment('audio/mp4', 'Tidal Lock.m4a'));
+  assert.equal(isVideoAttachment('audio/mp4', 'Tidal Lock.m4a'), false);
 
   // 2. Native Video extensions (.mp4, .webm, .mov)
   assert.equal(resolveAttachmentMimeType('suno_music_video.mp4'), 'video/mp4');
@@ -3696,4 +3702,94 @@ test('12:33 AM blank bubble regression: truncated read_journals/read_drawer JSON
   assert.ok(sysWithReceipts.includes('RECENT TURN GROUND-TRUTH TOOL RECEIPTS'));
   assert.ok(sysWithReceipts.includes('- read_journals -> {"ok":true}'));
 });
+
+test('Tidal Lock.m4a regression: audio/m4a normalizes to audio/mp4, skips visual OCR, and Gemini iterable helpers resist malformed payloads', async () => {
+  const {
+    generateImageSummaryAndOcr,
+    resolveAttachmentMimeType,
+    normalizeAudioMimeType,
+    isAudioAttachment,
+    isVideoAttachment,
+  } = await import('./workbenchLogic.js');
+  const {
+    normalizeInlineMediaMimeType,
+    sanitizeGeminiContents,
+    normalizeGeminiGenerateContentResult,
+    extractSafeGeminiText,
+    extractSafeGeminiFunctionCalls,
+  } = await import('../services/geminiService.js');
+
+  // 1. .m4a variants always normalize cleanly to Gemini's supported audio/mp4
+  assert.equal(normalizeInlineMediaMimeType('audio/m4a'), 'audio/mp4');
+  assert.equal(normalizeInlineMediaMimeType('audio/x-m4a; charset=binary'), 'audio/mp4');
+  assert.equal(normalizeInlineMediaMimeType('audio/mp4a-latm'), 'audio/mp4');
+  assert.equal(normalizeAudioMimeType('audio/m4a'), 'audio/mp4');
+  assert.equal(resolveAttachmentMimeType('Tidal Lock.m4a', 'audio/m4a'), 'audio/mp4');
+  assert.equal(isAudioAttachment('audio/mp4', 'Tidal Lock.m4a'), true);
+  assert.equal(isVideoAttachment('audio/mp4', 'Tidal Lock.m4a'), false);
+
+  // 2. Visual OCR/image summarizer MUST return '' immediately for audio files
+  const audioOcrResult = await generateImageSummaryAndOcr({
+    base64Data: 'AAAAIGZ0eXBNNEEg',
+    mimeType: 'audio/m4a',
+    filename: 'Tidal Lock.m4a',
+  });
+  assert.equal(audioOcrResult, '');
+
+  // 3. sanitizeGeminiContents normalizes inlineData MIME and guards non-array parts/entries
+  const sanitized = sanitizeGeminiContents([
+    null as any,
+    {
+      role: 'user',
+      parts: {
+        inlineData: { mimeType: 'audio/m4a', data: 'AAAAIGZ0eXBNNEEg' },
+      } as any,
+    },
+    {
+      role: 'model',
+      parts: 'hello' as any,
+    },
+  ]);
+  assert.equal(sanitized.length, 1);
+  assert.equal(sanitized[0].parts?.[0]?.inlineData?.mimeType, 'audio/mp4');
+
+  // 4. Response helpers NEVER throw "r is not iterable" even when candidates/parts are non-array objects
+  const malformedResponse = {
+    candidates: {
+      0: { content: { parts: { bad: true } } },
+    },
+    get text() {
+      throw new TypeError('r is not iterable');
+    },
+    get functionCalls() {
+      throw new TypeError('r is not iterable');
+    },
+  };
+  const normalizedResp = normalizeGeminiGenerateContentResult(malformedResponse as any);
+  assert.ok(Array.isArray((normalizedResp as any).candidates));
+  assert.equal(extractSafeGeminiText(normalizedResp), '');
+  assert.deepEqual(extractSafeGeminiFunctionCalls(normalizedResp), []);
+
+  // 5. Well-formed functionCall + text parts extract cleanly
+  const goodResp = {
+    candidates: [
+      {
+        content: {
+          role: 'model',
+          parts: [
+            { thought: true, text: 'Internal thought' },
+            { text: '*I listen closely.* "Hear that bassline?"' },
+            { functionCall: { id: 'c1', name: 'react_to_message', args: { emoji: '🎵' } } },
+          ],
+        },
+      },
+    ],
+  };
+  assert.equal(extractSafeGeminiText(goodResp), '*I listen closely.* "Hear that bassline?"');
+  const extractedCalls = extractSafeGeminiFunctionCalls(goodResp);
+  assert.equal(extractedCalls.length, 1);
+  assert.equal(extractedCalls[0].name, 'react_to_message');
+  assert.equal(extractedCalls[0].args.emoji, '🎵');
+});
+
 

@@ -28,6 +28,7 @@ import {
   toggleMessageReaction,
   stripToolReceiptsFromVisibleText,
   stripLeakedSystemContextFromUserText,
+  getSessionImage,
 } from '../utils/workbenchLogic';
 import { loadAvatarRepository } from './HouseholdAvatarUploaderModal';
 import { CodeCopyBlock } from './CodeCopyBlock';
@@ -781,8 +782,10 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
             <div className="flex flex-col gap-2 mb-2">
               {msg.images.map((img, iIdx) => {
                 const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+                const resolvedData = img.data || getSessionImage(`${msg.id}_${iIdx}`)?.data || '';
 
                 if (isAudioAttachment(mime, img.name)) {
+                  const cleanAudioMime = normalizeAudioMimeType(mime);
                   return (
                     <div
                       key={iIdx}
@@ -795,15 +798,21 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
                           <span className="truncate">{img.name || 'Audio Attachment'}</span>
                         </span>
                         <span className="text-[10px] font-mono text-[#cbb693] shrink-0">
-                          {img.size ? `${Math.round(img.size / 1024)} KB` : normalizeAudioMimeType(mime)}
+                          {img.size ? `${Math.round(img.size / 1024)} KB` : cleanAudioMime}
                         </span>
                       </div>
-                      <audio
-                        controls
-                        preload="metadata"
-                        src={`data:${normalizeAudioMimeType(mime)};base64,${img.data}`}
-                        className="w-full h-8 rounded-lg"
-                      />
+                      {resolvedData ? (
+                        <audio
+                          controls
+                          preload="metadata"
+                          src={`data:${cleanAudioMime};base64,${resolvedData}`}
+                          className="w-full h-8 rounded-lg"
+                        />
+                      ) : (
+                        <div className="text-[10px] font-mono text-[#cbb693] italic">
+                          Audio stored in Sanctuary Media Vault ({cleanAudioMime})
+                        </div>
+                      )}
                       {img.description && (
                         <div className="text-[10px] font-mono text-[#e6c88c]">
                           💬 {img.description}
@@ -829,13 +838,19 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
                           {img.size ? `${Math.round(img.size / 1024)} KB` : mime}
                         </span>
                       </div>
-                      <video
-                        controls
-                        playsInline
-                        preload="metadata"
-                        src={`data:${mime};base64,${img.data}`}
-                        className="w-full max-h-60 rounded-lg border border-[#6b5331]/40 bg-black object-contain"
-                      />
+                      {resolvedData ? (
+                        <video
+                          controls
+                          playsInline
+                          preload="metadata"
+                          src={`data:${mime};base64,${resolvedData}`}
+                          className="w-full max-h-60 rounded-lg border border-[#6b5331]/40 bg-black object-contain"
+                        />
+                      ) : (
+                        <div className="text-[10px] font-mono text-[#cbb693] italic">
+                          Video stored in Sanctuary Media Vault ({mime})
+                        </div>
+                      )}
                       {img.description && (
                         <div className="text-[10px] font-mono text-[#e6c88c]">
                           💬 {img.description}

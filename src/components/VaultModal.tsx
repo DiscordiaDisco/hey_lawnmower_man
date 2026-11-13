@@ -10,6 +10,9 @@ import {
   writeItemToPhoneFolder,
   detectMediaCategory,
   isVideoAttachment,
+  resolveAttachmentMimeType,
+  isAudioAttachment,
+  normalizeAudioMimeType,
 } from '../utils/workbenchLogic';
 
 interface VaultModalProps {
@@ -118,11 +121,15 @@ export const VaultModal: React.FC<VaultModalProps> = ({
           }
         }
 
-        const category = detectMediaCategory(file.type, file.name);
+        const resolvedMime = resolveAttachmentMimeType(file.name, file.type);
+        const normalizedMime = isAudioAttachment(resolvedMime, file.name)
+          ? normalizeAudioMimeType(resolvedMime)
+          : resolvedMime;
+        const category = detectMediaCategory(normalizedMime, file.name);
         await addMediaVaultItem({
           filename: file.name,
           category,
-          mimeType: file.type || 'application/octet-stream',
+          mimeType: normalizedMime || 'application/octet-stream',
           size: file.size,
           dataUrl,
           origin: 'chat_upload',

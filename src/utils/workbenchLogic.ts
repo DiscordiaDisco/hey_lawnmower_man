@@ -2348,10 +2348,12 @@ export function stripMergedStaffLinesFromArgonOutput(
 
 const VERIFIED_TOOL_RECEIPT_HEADER_RE =
   /^\s*\*{0,2}\[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN\]:?\*{0,2}\s*(.*)$/i;
+const RECEIPT_OPEN_TAG_RE = /<internal_tool_receipts\b[^>]*>/gi;
+const RECEIPT_CLOSE_TAG_RE = /<\/internal_tool_receipts>/gi;
 const RECEIPT_BULLET_LINE_RE =
-  /^\s*-\s+[a-z0-9_]+(?:\s*\([^)]*\)|\s+[^\n]{1,220})?\s*->/i;
-const RECEIPT_JSON_FRAGMENT_RE =
-  /^\s*(?:\{|\[|\}|\]|"(?:[^"\\]|\\.)*"\s*:)/;
+  /^\s*[-*•]\s+[a-z0-9_]+(?:\s*\([^)]*\)|\s+[^\n]{1,220})?\s*->/i;
+const RECEIPT_JSON_CONTINUATION_RE =
+  /^\s*(?:\{|\}|\[|\]|"(?:[^"\\]|\\.)*"\s*:.*)\s*,?\s*$/;
 
 function updateJsonBracketDepth(currentDepth: number, line: string): number {
   let depth = currentDepth;
@@ -2381,8 +2383,8 @@ function updateJsonBracketDepth(currentDepth: number, line: string): number {
 
 /**
  * Extracts and strips any leaked/prepended `[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:...`
- * or `<internal_tool_receipts>...</internal_tool_receipts>` blocks from visible chat/TTS text
- * while keeping actual roleplay action beats and dialogue completely intact.
+ * or `<internal_tool_receipts>...</internal_tool_receipts>` wrapper tags and receipt lines from visible
+ * chat/TTS text while ALWAYS preserving all narrative roleplay action beats and spoken dialogue.
  */
 export function extractAndStripToolReceipts(rawText: string): {
   cleanText: string;
@@ -2391,57 +2393,76 @@ export function extractAndStripToolReceipts(rawText: string): {
   if (!rawText || typeof rawText !== 'string') {
     return { cleanText: '' };
   }
-  if (!/\[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN\]|<internal_tool_receipts\b/i.test(rawText)) {
+  if (!/\[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN\]|<\/?internal_tool_receipts\b/i.test(rawText)) {
     return { cleanText: rawText };
   }
 
   const receiptChunks: string[] = [];
-  const withoutXmlBlocks = rawText.replace(
-    /<internal_tool_receipts\b[^>]*>([\s\S]*?)<\/internal_tool_receipts>\s*/gi,
-    (_full, inner: string) => {
-      const trimmedInner = (inner || '').trim();
-      if (trimmedInner) receiptChunks.push(trimmedInner);
-      return '';
-    }
-  );
+  // Normalize inline <internal_tool_receipts> / </internal_tool_receipts> tags onto boundaries without swallowing enclosed narrative text
+  const normalizedText = rawText
+    .replace(RECEIPT_OPEN_TAG_RE, '\n__INTERNAL_TOOL_RECEIPT_OPEN__\n')
+    .replace(RECEIPT_CLOSE_TAG_RE, '\n__INTERNAL_TOOL_RECEIPT_CLOSE__\n');
 
-  const lines = withoutXmlBlocks.split(/\r?\n/);
+  const lines = normalizedText.split(/\r?\n/);
   const keptLines: string[] = [];
   let inReceiptBlock = false;
   let braceDepth = 0;
-  let sawReceiptLine = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const headerMatch = !inReceiptBlock ? line.match(VERIFIED_TOOL_RECEIPT_HEADER_RE) : null;
+    const trimmed = line.trim();
 
+    if (trimmed === '__INTERNAL_TOOL_RECEIPT_OPEN__') {
+      inReceiptBlock = true;
+      braceDepth = 0;
+      continue;
+    }
+
+    if (trimmed === '__INTERNAL_TOOL_RECEIPT_CLOSE__') {
+      inReceiptBlock = false;
+      braceDepth = 0;
+      continue;
+    }
+
+    const headerMatch = line.match(VERIFIED_TOOL_RECEIPT_HEADER_RE);
     if (headerMatch) {
       inReceiptBlock = true;
       braceDepth = 0;
-      sawReceiptLine = false;
       const inlineTail = (headerMatch[1] || '').trim();
       if (inlineTail) {
-        receiptChunks.push(inlineTail);
-        braceDepth = updateJsonBracketDepth(braceDepth, inlineTail);
-        sawReceiptLine = true;
+        if (RECEIPT_BULLET_LINE_RE.test(inlineTail) || RECEIPT_JSON_CONTINUATION_RE.test(inlineTail)) {
+          receiptChunks.push(inlineTail);
+          braceDepth = updateJsonBracketDepth(0, inlineTail);
+        } else {
+          // Narrative text directly after header on same line — keep it!
+          keptLines.push(inlineTail);
+          inReceiptBlock = false;
+        }
       }
       continue;
     }
 
     if (inReceiptBlock) {
-      const trimmed = line.trim();
       if (!trimmed) {
-        // Skip consecutive blank lines
+        // Skip consecutive blank lines and ONLY remain inside receipt block if next non-empty line is another receipt bullet/header/tag
         let j = i + 1;
-        while (j < lines.length && !lines[j].trim()) {
+        while (
+          j < lines.length &&
+          (!lines[j].trim() ||
+            lines[j].trim() === '__INTERNAL_TOOL_RECEIPT_OPEN__' ||
+            lines[j].trim() === '__INTERNAL_TOOL_RECEIPT_CLOSE__')
+        ) {
+          if (lines[j].trim() === '__INTERNAL_TOOL_RECEIPT_CLOSE__') {
+            inReceiptBlock = false;
+            braceDepth = 0;
+          }
           j++;
         }
         const nextLine = j < lines.length ? lines[j] : '';
         const nextLooksLikeReceipt =
+          inReceiptBlock &&
           Boolean(nextLine) &&
-          (braceDepth > 0 ||
-            RECEIPT_BULLET_LINE_RE.test(nextLine) ||
-            RECEIPT_JSON_FRAGMENT_RE.test(nextLine) ||
+          (RECEIPT_BULLET_LINE_RE.test(nextLine) ||
             VERIFIED_TOOL_RECEIPT_HEADER_RE.test(nextLine));
         i = j - 1;
         if (!nextLooksLikeReceipt) {
@@ -2451,16 +2472,13 @@ export function extractAndStripToolReceipts(rawText: string): {
         continue;
       }
 
-      const isReceiptLine =
-        braceDepth > 0 ||
-        RECEIPT_BULLET_LINE_RE.test(line) ||
-        RECEIPT_JSON_FRAGMENT_RE.test(line) ||
-        (!sawReceiptLine && !/^\s*(?:\*[A-Za-z"']|["“#>])/.test(line));
+      // Never let truncated JSON snippets swallow narrative lines, action beats (*...*), headings, or dialogue!
+      const isStrictJsonLine = braceDepth > 0 && RECEIPT_JSON_CONTINUATION_RE.test(line);
+      const isReceiptLine = RECEIPT_BULLET_LINE_RE.test(line) || isStrictJsonLine;
 
       if (isReceiptLine) {
         receiptChunks.push(trimmed);
         braceDepth = updateJsonBracketDepth(braceDepth, trimmed);
-        sawReceiptLine = true;
         continue;
       }
 
@@ -2471,7 +2489,29 @@ export function extractAndStripToolReceipts(rawText: string): {
     keptLines.push(line);
   }
 
-  const cleanText = keptLines.join('\n').trim();
+  let cleanText = keptLines
+    .join('\n')
+    .replace(/__(?:INTERNAL_TOOL_RECEIPT_OPEN|INTERNAL_TOOL_RECEIPT_CLOSE)__/g, '')
+    .trim();
+
+  // Safety fallback: if stripping ever produced an empty string while rawText contained non-receipt narrative lines, preserve them
+  if (!cleanText) {
+    const fallbackLines = normalizedText
+      .split(/\r?\n/)
+      .filter((l) => {
+        const t = l.trim();
+        if (!t) return false;
+        if (t === '__INTERNAL_TOOL_RECEIPT_OPEN__' || t === '__INTERNAL_TOOL_RECEIPT_CLOSE__') {
+          return false;
+        }
+        if (VERIFIED_TOOL_RECEIPT_HEADER_RE.test(l)) return false;
+        if (RECEIPT_BULLET_LINE_RE.test(l)) return false;
+        if (RECEIPT_JSON_CONTINUATION_RE.test(l)) return false;
+        return true;
+      });
+    cleanText = fallbackLines.join('\n').trim();
+  }
+
   const extractedReceipts = receiptChunks.filter(Boolean).join('\n').trim() || undefined;
   return { cleanText, extractedReceipts };
 }
@@ -9738,6 +9778,7 @@ export function buildLiveTurnSystemContextBlock(params: {
   bridgeModel?: string;
   bridgePerception?: string;
   dynamicDrawersBlock?: string;
+  historicalToolReceiptsBlock?: string;
 }): string {
   const {
     currentRoomStateSummary = '',
@@ -9749,6 +9790,7 @@ export function buildLiveTurnSystemContextBlock(params: {
     bridgeModel = '',
     bridgePerception = '',
     dynamicDrawersBlock = '',
+    historicalToolReceiptsBlock = '',
   } = params;
 
   const scratchpadNumberedLines =
@@ -9811,6 +9853,12 @@ export function buildLiveTurnSystemContextBlock(params: {
 
   if (dynamicDrawersBlock && dynamicDrawersBlock.trim()) {
     sections.push(dynamicDrawersBlock.trim());
+  }
+
+  if (historicalToolReceiptsBlock && historicalToolReceiptsBlock.trim()) {
+    sections.push(
+      `[RECENT TURN GROUND-TRUTH TOOL RECEIPTS (Internal reference only — NEVER copy headers, XML tags, or raw JSON into your visible chat message)]\n${historicalToolReceiptsBlock.trim()}`
+    );
   }
 
   return [
@@ -10078,6 +10126,8 @@ export async function runClientChatTurn(params: {
       : 20;
   const effectiveHistory = history.slice(-historyLimit);
 
+  const historicalToolReceiptEntries: string[] = [];
+
   for (let turnIdx = 0; turnIdx < effectiveHistory.length; turnIdx++) {
     const turn = effectiveHistory[turnIdx];
     const parts: Part[] = [];
@@ -10106,8 +10156,8 @@ export async function runClientChatTurn(params: {
         text: '[Previous voice audio clip omitted to save tokens]\n\n',
       });
     }
-    // Preserve compact ground-truth tool execution receipts on Argon's historical turns as hidden metadata
-    // (clearly delimited so Gemini does not echo raw JSON headers into visible roleplay bubbles)
+    // Keep ground-truth tool receipts in hidden system context rather than prepending tags inside role='model' turns
+    // so Gemini never mimics raw receipt headers/tags at Token 0 of its new response.
     const turnParsedModelText =
       turn.role === 'model' ? extractAndStripToolReceipts(turn.text || '') : null;
     if (turn.role === 'model') {
@@ -10117,9 +10167,9 @@ export async function runClientChatTurn(params: {
         turnParsedModelText?.extractedReceipts ||
         lookupSessionModelToolReceipt(turnParsedModelText?.cleanText || turn.text || '');
       if (persistedReceipt) {
-        parts.push({
-          text: `<internal_tool_receipts note="Hidden ground-truth tool execution metadata from this historical turn. NEVER echo, quote, or reproduce these tags, headers, or raw JSON in your visible reply.">\n${persistedReceipt}\n</internal_tool_receipts>\n\n`,
-        });
+        historicalToolReceiptEntries.push(
+          `Turn ${turnIdx + 1}:\n${persistedReceipt.trim()}`
+        );
       }
     }
     // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
@@ -10137,6 +10187,8 @@ export async function runClientChatTurn(params: {
       });
     }
   }
+
+  const historicalToolReceiptsBlock = historicalToolReceiptEntries.slice(-8).join('\n\n');
 
   const currentParts: Part[] = [];
   const attachedDescriptions: string[] = [];
@@ -10390,6 +10442,7 @@ export async function runClientChatTurn(params: {
       bridgeModel: activeBrainRoute.model,
       bridgePerception: turnBridgePerception,
       dynamicDrawersBlock,
+      historicalToolReceiptsBlock,
     });
 
     const fullSystemInstruction = [

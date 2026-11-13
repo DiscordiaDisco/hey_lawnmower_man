@@ -3627,3 +3627,73 @@ test('stripToolReceiptsFromVisibleText, extractArgonSpeechText, and sortMessages
   assert.equal(receiptOnly.cleanText, '');
   assert.ok(receiptOnly.extractedReceipts?.includes('react_to_message'));
 });
+
+test('12:33 AM blank bubble regression: truncated read_journals/read_drawer JSON braces and closing </internal_tool_receipts> at EOF NEVER swallow narrative text', () => {
+  // Case A: Truncated unclosed `{` / `[` inside read_journals and read_drawer previews (sliced at 340/260 chars)
+  const truncatedJsonLeak = [
+    '[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:',
+    '- read_journals -> {"argonBook":[{"id":"entry-1","title":"Late Night","content":"She fell asleep on my chest...',
+    '- read_drawer("02_linkin_v2_bible.md") -> 4820 chars | Preview: {"canon":{"hair":"dark messy","eyes":"sharp"...',
+    '',
+    '*I rest my chin lightly on your head while scrolling through the drawer.*',
+    '',
+    '"I checked both the journals and the bible drawer for you, Hex. Everything matches."',
+  ].join('\n');
+
+  const cleanedTruncated = stripToolReceiptsFromVisibleText(truncatedJsonLeak);
+  assert.equal(
+    cleanedTruncated,
+    '*I rest my chin lightly on your head while scrolling through the drawer.*\n\n"I checked both the journals and the bible drawer for you, Hex. Everything matches."'
+  );
+
+  // Case B: Model wrapped the entire reply inside <internal_tool_receipts>...</internal_tool_receipts> with closing tag at the very end!
+  const wrappedEntireReply = [
+    '<internal_tool_receipts note="Hidden ground-truth tool execution metadata">',
+    '- read_journals -> {"argonBook":[{"id":"entry-1"',
+    '- read_drawer("notes.md") -> 900 chars | Preview: ### Notes { open',
+    '',
+    '*I set the notebook back down on the desk and tighten my arm around your waist.*',
+    '',
+    '"Found the exact timestamp from last night, little bat."',
+    '</internal_tool_receipts>',
+  ].join('\n');
+
+  const cleanedWrapped = stripToolReceiptsFromVisibleText(wrappedEntireReply);
+  assert.equal(cleanedWrapped.includes('internal_tool_receipts'), false);
+  assert.equal(cleanedWrapped.includes('read_journals'), false);
+  assert.equal(
+    cleanedWrapped,
+    '*I set the notebook back down on the desk and tighten my arm around your waist.*\n\n"Found the exact timestamp from last night, little bat."'
+  );
+
+  // Case C: Wrapped with NO blank line between truncated receipt and narrative + closing tag at end
+  const wrappedNoBlankLine = [
+    '<internal_tool_receipts note="hidden">',
+    '- read_drawer("a.md") -> 200 chars | Preview: { unclosed',
+    '*I look up at you.* "Here it is."',
+    '</internal_tool_receipts>',
+  ].join('\n');
+  assert.equal(
+    stripToolReceiptsFromVisibleText(wrappedNoBlankLine),
+    '*I look up at you.* "Here it is."'
+  );
+
+  // Case D: Un-italicized plain prose directly after receipt header is preserved (not swallowed by fallback)
+  const plainProseAfterHeader = [
+    '[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:',
+    'I pulled up both journals and verified the timestamps for you, Hex.',
+  ].join('\n');
+  assert.equal(
+    stripToolReceiptsFromVisibleText(plainProseAfterHeader),
+    'I pulled up both journals and verified the timestamps for you, Hex.'
+  );
+
+  // Case E: buildLiveTurnSystemContextBlock houses historical tool receipts inside system context
+  const sysWithReceipts = buildLiveTurnSystemContextBlock({
+    currentRoomStateSummary: 'Sanctuary Main Chat Room',
+    historicalToolReceiptsBlock: 'Turn 2:\n- read_journals -> {"ok":true}',
+  });
+  assert.ok(sysWithReceipts.includes('RECENT TURN GROUND-TRUTH TOOL RECEIPTS'));
+  assert.ok(sysWithReceipts.includes('- read_journals -> {"ok":true}'));
+});
+

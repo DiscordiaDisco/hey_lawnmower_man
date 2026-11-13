@@ -40,6 +40,7 @@ export interface Message {
   thinkingBudgetUsed?: number;
   thinkingUsed?: string;
   completedAt?: string;
+  toolReceipts?: string;
   toolResultsSummary?: string;
 }
 

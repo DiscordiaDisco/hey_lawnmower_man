@@ -2346,6 +2346,144 @@ export function stripMergedStaffLinesFromArgonOutput(
   return cleanedLines.join('\n').trim();
 }
 
+const VERIFIED_TOOL_RECEIPT_HEADER_RE =
+  /^\s*\*{0,2}\[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN\]:?\*{0,2}\s*(.*)$/i;
+const RECEIPT_BULLET_LINE_RE =
+  /^\s*-\s+[a-z0-9_]+(?:\s*\([^)]*\)|\s+[^\n]{1,220})?\s*->/i;
+const RECEIPT_JSON_FRAGMENT_RE =
+  /^\s*(?:\{|\[|\}|\]|"(?:[^"\\]|\\.)*"\s*:)/;
+
+function updateJsonBracketDepth(currentDepth: number, line: string): number {
+  let depth = currentDepth;
+  let inString = false;
+  let escapeNext = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (ch === '\\') {
+      if (inString) escapeNext = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') depth = Math.max(0, depth - 1);
+    }
+  }
+  return depth;
+}
+
+/**
+ * Extracts and strips any leaked/prepended `[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:...`
+ * or `<internal_tool_receipts>...</internal_tool_receipts>` blocks from visible chat/TTS text
+ * while keeping actual roleplay action beats and dialogue completely intact.
+ */
+export function extractAndStripToolReceipts(rawText: string): {
+  cleanText: string;
+  extractedReceipts?: string;
+} {
+  if (!rawText || typeof rawText !== 'string') {
+    return { cleanText: '' };
+  }
+  if (!/\[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN\]|<internal_tool_receipts\b/i.test(rawText)) {
+    return { cleanText: rawText };
+  }
+
+  const receiptChunks: string[] = [];
+  const withoutXmlBlocks = rawText.replace(
+    /<internal_tool_receipts\b[^>]*>([\s\S]*?)<\/internal_tool_receipts>\s*/gi,
+    (_full, inner: string) => {
+      const trimmedInner = (inner || '').trim();
+      if (trimmedInner) receiptChunks.push(trimmedInner);
+      return '';
+    }
+  );
+
+  const lines = withoutXmlBlocks.split(/\r?\n/);
+  const keptLines: string[] = [];
+  let inReceiptBlock = false;
+  let braceDepth = 0;
+  let sawReceiptLine = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const headerMatch = !inReceiptBlock ? line.match(VERIFIED_TOOL_RECEIPT_HEADER_RE) : null;
+
+    if (headerMatch) {
+      inReceiptBlock = true;
+      braceDepth = 0;
+      sawReceiptLine = false;
+      const inlineTail = (headerMatch[1] || '').trim();
+      if (inlineTail) {
+        receiptChunks.push(inlineTail);
+        braceDepth = updateJsonBracketDepth(braceDepth, inlineTail);
+        sawReceiptLine = true;
+      }
+      continue;
+    }
+
+    if (inReceiptBlock) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        // Skip consecutive blank lines
+        let j = i + 1;
+        while (j < lines.length && !lines[j].trim()) {
+          j++;
+        }
+        const nextLine = j < lines.length ? lines[j] : '';
+        const nextLooksLikeReceipt =
+          Boolean(nextLine) &&
+          (braceDepth > 0 ||
+            RECEIPT_BULLET_LINE_RE.test(nextLine) ||
+            RECEIPT_JSON_FRAGMENT_RE.test(nextLine) ||
+            VERIFIED_TOOL_RECEIPT_HEADER_RE.test(nextLine));
+        i = j - 1;
+        if (!nextLooksLikeReceipt) {
+          inReceiptBlock = false;
+          braceDepth = 0;
+        }
+        continue;
+      }
+
+      const isReceiptLine =
+        braceDepth > 0 ||
+        RECEIPT_BULLET_LINE_RE.test(line) ||
+        RECEIPT_JSON_FRAGMENT_RE.test(line) ||
+        (!sawReceiptLine && !/^\s*(?:\*[A-Za-z"']|["“#>])/.test(line));
+
+      if (isReceiptLine) {
+        receiptChunks.push(trimmed);
+        braceDepth = updateJsonBracketDepth(braceDepth, trimmed);
+        sawReceiptLine = true;
+        continue;
+      }
+
+      inReceiptBlock = false;
+      braceDepth = 0;
+    }
+
+    keptLines.push(line);
+  }
+
+  const cleanText = keptLines.join('\n').trim();
+  const extractedReceipts = receiptChunks.filter(Boolean).join('\n').trim() || undefined;
+  return { cleanText, extractedReceipts };
+}
+
+/**
+ * Strips any `[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:...` or internal tool receipt
+ * blocks so raw JSON tool receipts never appear in visible chat bubbles or TTS readout.
+ */
+export function stripToolReceiptsFromVisibleText(rawText: string): string {
+  return extractAndStripToolReceipts(rawText).cleanText;
+}
+
 /**
  * Builds the system instruction for a Staff Agent's own Gemini model call so the agent
  * genuinely types in the chat as their character using standard roleplay formatting
@@ -6219,8 +6357,14 @@ export function extractArgonSpeechText(
 ): string {
   if (!markdown || !markdown.trim()) return '';
 
+  // 0. Strip any raw tool receipt blocks and leaked system context markers before TTS
+  const withoutReceipts = stripLeakedSystemContextFromUserText(
+    stripToolReceiptsFromVisibleText(markdown)
+  );
+  if (!withoutReceipts.trim()) return '';
+
   // 1. Remove fenced code blocks
-  const withoutCodeBlocks = markdown.replace(/```[\s\S]*?```/g, ' ');
+  const withoutCodeBlocks = withoutReceipts.replace(/```[\s\S]*?```/g, ' ');
 
   const cleanSymbols = (input: string): string =>
     input
@@ -9358,7 +9502,9 @@ export async function runClientStaffTask(params: {
   const combinedRawOutput = [...preToolStaffChunks, (staffRes.text || '').trim()]
     .filter(Boolean)
     .join('\n\n');
-  const output = stripMergedArgonLinesFromStaffOutput(combinedRawOutput, agent.name);
+  const output = stripToolReceiptsFromVisibleText(
+    stripMergedArgonLinesFromStaffOutput(combinedRawOutput, agent.name)
+  );
   let argonReaction = '';
   let argonReactionTokenUsage: MessageTokenUsage | undefined = undefined;
 
@@ -9378,11 +9524,13 @@ export async function runClientStaffTask(params: {
         config: { systemInstruction: reactSysPrompt },
         customApiKey,
       });
-      argonReaction = stripMergedStaffLinesFromArgonOutput((reactRes.result.text || '').trim(), [
-        agent.name,
-        'Haiku',
-        'A Monkey',
-      ]);
+      argonReaction = stripToolReceiptsFromVisibleText(
+        stripMergedStaffLinesFromArgonOutput((reactRes.result.text || '').trim(), [
+          agent.name,
+          'Haiku',
+          'A Monkey',
+        ])
+      );
       const reactFallback = estimateFullApiPayloadTokens({
         fullSystemInstruction: reactSysPrompt,
         currentTurnText: reactUserText,
@@ -9679,7 +9827,7 @@ export const DEFAULT_TOOL_LOOP_TIMEOUT_MS = 120_000;
 const sessionModelTurnToolReceipts = new Map<string, string>();
 
 export function recordSessionModelToolReceipt(modelText: string, receiptSummary: string): void {
-  const key = (modelText || '').trim().slice(0, 180);
+  const key = stripToolReceiptsFromVisibleText(modelText || '').trim().slice(0, 180);
   if (!key || !receiptSummary.trim()) return;
   if (sessionModelTurnToolReceipts.size >= 60) {
     const oldestKey = sessionModelTurnToolReceipts.keys().next().value;
@@ -9691,7 +9839,7 @@ export function recordSessionModelToolReceipt(modelText: string, receiptSummary:
 }
 
 export function lookupSessionModelToolReceipt(modelText: string): string | undefined {
-  const key = (modelText || '').trim().slice(0, 180);
+  const key = stripToolReceiptsFromVisibleText(modelText || '').trim().slice(0, 180);
   if (!key) return undefined;
   return sessionModelTurnToolReceipts.get(key);
 }
@@ -9782,6 +9930,7 @@ export async function runClientChatTurn(params: {
     role: 'user' | 'model';
     text: string;
     telemetryHeader?: string;
+    toolReceipts?: string;
     toolResultsSummary?: string;
     images?: Array<{
       mimeType: string;
@@ -9957,20 +10106,27 @@ export async function runClientChatTurn(params: {
         text: '[Previous voice audio clip omitted to save tokens]\n\n',
       });
     }
-    // Preserve compact ground-truth tool execution receipts on Argon's historical turns so he never wakes up blind
+    // Preserve compact ground-truth tool execution receipts on Argon's historical turns as hidden metadata
+    // (clearly delimited so Gemini does not echo raw JSON headers into visible roleplay bubbles)
+    const turnParsedModelText =
+      turn.role === 'model' ? extractAndStripToolReceipts(turn.text || '') : null;
     if (turn.role === 'model') {
       const persistedReceipt =
+        (typeof turn.toolReceipts === 'string' && turn.toolReceipts.trim()) ||
         (typeof turn.toolResultsSummary === 'string' && turn.toolResultsSummary.trim()) ||
-        lookupSessionModelToolReceipt(turn.text || '');
+        turnParsedModelText?.extractedReceipts ||
+        lookupSessionModelToolReceipt(turnParsedModelText?.cleanText || turn.text || '');
       if (persistedReceipt) {
         parts.push({
-          text: `[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:\n${persistedReceipt}\n\n`,
+          text: `<internal_tool_receipts note="Hidden ground-truth tool execution metadata from this historical turn. NEVER echo, quote, or reproduce these tags, headers, or raw JSON in your visible reply.">\n${persistedReceipt}\n</internal_tool_receipts>\n\n`,
         });
       }
     }
     // Telemetry is NOT injected directly into Argon's historical turns to preserve prompt prefix caching!
     const combinedText =
-      turn.role === 'user' ? stripLeakedSystemContextFromUserText(turn.text) : turn.text;
+      turn.role === 'user'
+        ? stripLeakedSystemContextFromUserText(turn.text)
+        : (turnParsedModelText?.cleanText ?? stripToolReceiptsFromVisibleText(turn.text));
     if (combinedText) {
       parts.push({ text: combinedText });
     }
@@ -10346,15 +10502,19 @@ export async function runClientChatTurn(params: {
     }
     loopCount++;
     if (response.text && response.text.trim()) {
-      const cleanPre = stripMergedStaffLinesFromArgonOutput(
-        response.text.trim(),
-        staffAgents.map((a) => a.name)
+      const cleanPre = stripToolReceiptsFromVisibleText(
+        stripMergedStaffLinesFromArgonOutput(
+          response.text.trim(),
+          staffAgents.map((a) => a.name)
+        )
       );
-      preToolArgonTexts.push(cleanPre);
-      onModelPartialTurn?.({
-        text: cleanPre,
-        toolBadges: [...toolBadges],
-      });
+      if (cleanPre) {
+        preToolArgonTexts.push(cleanPre);
+        onModelPartialTurn?.({
+          text: cleanPre,
+          toolBadges: [...toolBadges],
+        });
+      }
     }
     const modelContent = response.candidates?.[0]?.content;
     if (modelContent) {
@@ -11572,11 +11732,12 @@ export async function runClientChatTurn(params: {
   }
 
   const allStaffNames = staffAgents.map((a) => a.name);
-  let postToolArgonText = stripMergedStaffLinesFromArgonOutput(
-    (response.text || '').trim(),
-    allStaffNames
+  let postToolArgonText = stripToolReceiptsFromVisibleText(
+    stripMergedStaffLinesFromArgonOutput((response.text || '').trim(), allStaffNames)
   );
-  const preStaffArgonText = preToolArgonTexts.filter(Boolean).join('\n\n').trim();
+  const preStaffArgonText = stripToolReceiptsFromVisibleText(
+    preToolArgonTexts.filter(Boolean).join('\n\n').trim()
+  );
 
   // If tools executed and the final response stopped without spoken text (e.g. reached maxToolLoops=6 or timeout),
   // execute a single synthesis pass WITHOUT tools while preserving strict user/model turn alternation!
@@ -11612,9 +11773,11 @@ export async function runClientChatTurn(params: {
       });
 
       if (synthesisRes.result?.text) {
-        postToolArgonText = stripMergedStaffLinesFromArgonOutput(
-          synthesisRes.result.text.trim(),
-          allStaffNames
+        postToolArgonText = stripToolReceiptsFromVisibleText(
+          stripMergedStaffLinesFromArgonOutput(
+            synthesisRes.result.text.trim(),
+            allStaffNames
+          )
         );
       }
     } catch (synthErr) {
@@ -11663,9 +11826,11 @@ export async function runClientChatTurn(params: {
           thinkingBudget,
           thinkingLevel,
         });
-        argonStaffFollowUp = stripMergedStaffLinesFromArgonOutput(
-          (reactRes.result.text || '').trim(),
-          allStaffNames
+        argonStaffFollowUp = stripToolReceiptsFromVisibleText(
+          stripMergedStaffLinesFromArgonOutput(
+            (reactRes.result.text || '').trim(),
+            allStaffNames
+          )
         );
         const reactFallback = estimateFullApiPayloadTokens({
           fullSystemInstruction: reactSysPrompt,
@@ -11756,6 +11921,7 @@ export async function runClientChatTurn(params: {
     nativeReasoning: latestNativeReasoning,
     thoughtTokens: accumulatedThoughtTokens > 0 ? accumulatedThoughtTokens : undefined,
     toolBadges,
+    toolReceipts: toolResultsSummary,
     toolResultsSummary,
     toolRoundsExecuted: loopCount,
     occultInvocation: occultInvocation
@@ -15043,6 +15209,7 @@ export interface ChatMessage {
   thinkingBudgetUsed?: number;
   thinkingUsed?: string;
   completedAt?: string;
+  toolReceipts?: string;
   toolResultsSummary?: string;
 }
 
@@ -16546,10 +16713,20 @@ export function sortMessagesChronologically(messages: ChatMessage[]): ChatMessag
   for (const m of messages) {
     if (!m || !m.id || seen.has(m.id)) continue;
     seen.add(m.id);
-    const cleanedMsg =
-      m.role === 'user' && typeof m.text === 'string'
-        ? { ...m, text: stripLeakedSystemContextFromUserText(m.text) }
-        : m;
+    let cleanedMsg = m;
+    if (m.role === 'user' && typeof m.text === 'string') {
+      cleanedMsg = { ...m, text: stripLeakedSystemContextFromUserText(m.text) };
+    } else if (typeof m.text === 'string') {
+      const parsed = extractAndStripToolReceipts(m.text);
+      if (parsed.cleanText !== m.text || (parsed.extractedReceipts && !m.toolReceipts)) {
+        cleanedMsg = {
+          ...m,
+          text: parsed.cleanText,
+          toolReceipts: m.toolReceipts || m.toolResultsSummary || parsed.extractedReceipts,
+          toolResultsSummary: m.toolResultsSummary || parsed.extractedReceipts,
+        };
+      }
+    }
     unique.push(cleanedMsg);
   }
 

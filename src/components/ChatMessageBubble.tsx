@@ -26,6 +26,8 @@ import {
   resolveUserLocationTimeZone,
   MessageReaction,
   toggleMessageReaction,
+  stripToolReceiptsFromVisibleText,
+  stripLeakedSystemContextFromUserText,
 } from '../utils/workbenchLogic';
 import { loadAvatarRepository } from './HouseholdAvatarUploaderModal';
 import { CodeCopyBlock } from './CodeCopyBlock';
@@ -265,7 +267,13 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
   const [customEmojiInput, setCustomEmojiInput] = React.useState('');
 
   const isUser = msg.role === 'user';
-  const segments = parseMessageSegments(msg.text);
+  const displayText = React.useMemo(() => {
+    const raw = msg.text || '';
+    return isUser
+      ? stripLeakedSystemContextFromUserText(stripToolReceiptsFromVisibleText(raw))
+      : stripToolReceiptsFromVisibleText(raw);
+  }, [msg.text, isUser]);
+  const segments = parseMessageSegments(displayText);
   const userTz = props.userTimeZone || resolveUserLocationTimeZone(weather);
   const bubbleTimestamp = formatMessageBubbleTimestamp(msg.timestamp, {
     timezone: userTz,
@@ -286,7 +294,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
 
   const tokenBadgeInfo = formatPerMessageTokenBadge({
     role: msg.role,
-    text: msg.text,
+    text: displayText,
     images: msg.images,
     tokenUsage: msg.tokenUsage,
     fallbackFullPayloadTokens,
@@ -459,8 +467,8 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
   // Render Token Usage Popover Modal
   const renderTokenPopoverModal = () => {
     if (!isTokenPopoverOpen) return null;
-    const charCount = msg.text ? msg.text.length : 0;
-    const bubbleTokens = estimateMessageTokens(msg.text, msg.images);
+    const charCount = displayText ? displayText.length : 0;
+    const bubbleTokens = estimateMessageTokens(displayText, msg.images);
     const usage = msg.tokenUsage;
     const thoughtsTokens = usage?.thoughtTokens ?? 0;
     const isExact = Boolean(usage?.isExactApiCount);
@@ -912,9 +920,9 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
           )}
 
           {/* Voice audio note preview */}
-          {msg.voiceAudio && (!msg.text || msg.text.startsWith('🎙️')) ? (
+          {msg.voiceAudio && (!displayText || displayText.startsWith('🎙️')) ? (
             <div className="text-[11px] font-mono text-[#e6c88c] italic">
-              {msg.text || `🎙️ [Voice Note (${msg.voiceAudio.durationSec || 1}s)]`}
+              {displayText || `🎙️ [Voice Note (${msg.voiceAudio.durationSec || 1}s)]`}
             </div>
           ) : editingMsgId === msg.id ? (
             <div className="space-y-1.5">
@@ -1060,7 +1068,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
 
               <button
                 type="button"
-                onClick={() => onCopy?.(msg.id, msg.text)}
+                onClick={() => onCopy?.(msg.id, displayText)}
                 aria-label="Copy message"
                 title="Copy message"
                 className="px-1.5 py-0.5 rounded bg-[#1d1412]/80 hover:bg-[#2e201b] border border-[#c59b47]/40 text-[10px] font-mono text-[#e6c88c] cursor-pointer"
@@ -1337,7 +1345,7 @@ export const ChatMessageBubble = React.memo(function ChatMessageBubble(props: Ch
 
             <button
               type="button"
-              onClick={() => onCopy?.(msg.id, msg.text)}
+              onClick={() => onCopy?.(msg.id, displayText)}
               aria-label="Copy message"
               title="Copy message"
               className="px-1.5 py-0.5 rounded bg-[#1d1412]/80 hover:bg-[#2e201b] border border-[#c59b47]/40 text-[10px] font-mono text-[#e6c88c] cursor-pointer shrink-0"

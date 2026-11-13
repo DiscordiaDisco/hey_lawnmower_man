@@ -201,6 +201,8 @@ import {
   summarizeToolResultForHistory,
   recordSessionModelToolReceipt,
   lookupSessionModelToolReceipt,
+  stripToolReceiptsFromVisibleText,
+  extractAndStripToolReceipts,
 } from './workbenchLogic';
 
 test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => {
@@ -3550,3 +3552,78 @@ test('Android Standalone PWA Manifest, Service Worker, Relative Base, and GitHub
   assert.ok(deployWorkflow.includes('actions/deploy-pages'));
 });
 
+test('stripToolReceiptsFromVisibleText, extractArgonSpeechText, and sortMessagesChronologically strip [VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN] while preserving hidden metadata', () => {
+  const leakedSample = [
+    '[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:',
+    '- react_to_message -> {"status":"reacted","emoji":"🖤"}',
+    '- github_api GET /repos/DiscordiaDisco/hey_lawnmower_man/contents/src -> HTTP 200 (OK) | [{"name":"App.tsx","sha":"abc123"}]',
+    '',
+    '*I tighten my arm around your waist, resting my chin against your temple.*',
+    '',
+    '"I checked the repository and everything is intact, Hex."',
+  ].join('\n');
+
+  // 1. Visible bubble stripping removes header + all receipt bullets/JSON and preserves full roleplay
+  const cleanedBubble = stripToolReceiptsFromVisibleText(leakedSample);
+  assert.equal(cleanedBubble.includes('VERIFIED SESSION TOOL RECEIPTS'), false);
+  assert.equal(cleanedBubble.includes('react_to_message'), false);
+  assert.equal(cleanedBubble.includes('{"status":"reacted"}'), false);
+  assert.equal(
+    cleanedBubble,
+    '*I tighten my arm around your waist, resting my chin against your temple.*\n\n"I checked the repository and everything is intact, Hex."'
+  );
+
+  // 2. Single-newline leak (no blank line before action beat) & multiline JSON & <internal_tool_receipts> tags also strip cleanly
+  const singleNewlineSample =
+    '[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:\n- react_to_message -> {"status":"reacted"}\n*I squeeze your hand.* "Got it."';
+  assert.equal(
+    stripToolReceiptsFromVisibleText(singleNewlineSample),
+    '*I squeeze your hand.* "Got it."'
+  );
+
+  const multilineJsonSample =
+    '<internal_tool_receipts note="hidden">\n- github_api GET /foo -> {\n  "ok": true\n}\n</internal_tool_receipts>\n\n*I glance at the file.* "Done."';
+  assert.equal(
+    stripToolReceiptsFromVisibleText(multilineJsonSample),
+    '*I glance at the file.* "Done."'
+  );
+
+  // 3. Regular Argon messages without receipts remain untouched
+  const normalMessage = '*I pour fresh tea.*\n\n- First note\n- Second note\n\n"Here you go."';
+  assert.equal(stripToolReceiptsFromVisibleText(normalMessage), normalMessage);
+
+  // 4. TTS speech extraction strips raw JSON tool receipts in both full_clean and dialogue_only modes
+  const ttsFull = extractArgonSpeechText(leakedSample, 'full_clean');
+  assert.equal(ttsFull.includes('VERIFIED SESSION TOOL RECEIPTS'), false);
+  assert.equal(ttsFull.includes('react_to_message'), false);
+  assert.equal(ttsFull.includes('github_api'), false);
+  assert.ok(ttsFull.includes('I checked the repository and everything is intact, Hex.'));
+
+  const ttsDialogue = extractArgonSpeechText(leakedSample, 'dialogue_only');
+  assert.equal(ttsDialogue.includes('VERIFIED SESSION TOOL RECEIPTS'), false);
+  assert.equal(ttsDialogue.includes('react_to_message'), false);
+  assert.equal(ttsDialogue, '"I checked the repository and everything is intact, Hex."');
+
+  // 5. Retroactive cleanup via sortMessagesChronologically cleans existing persisted model bubbles and preserves hidden toolReceipts
+  const hydrated = sortMessagesChronologically([
+    {
+      id: 'argon-old-polluted-1',
+      role: 'model',
+      sender: 'argon',
+      text: leakedSample,
+      timestamp: 5000,
+    },
+  ]);
+  assert.equal(hydrated.length, 1);
+  assert.equal(hydrated[0].text.includes('VERIFIED SESSION TOOL RECEIPTS'), false);
+  assert.equal(hydrated[0].text.includes('react_to_message'), false);
+  assert.ok(hydrated[0].toolReceipts?.includes('react_to_message'));
+  assert.ok(hydrated[0].toolResultsSummary?.includes('github_api GET'));
+
+  // 6. extractAndStripToolReceipts handles receipt-only string cleanly
+  const receiptOnly = extractAndStripToolReceipts(
+    '[VERIFIED SESSION TOOL RECEIPTS FROM THIS TURN]:\n- react_to_message -> {"status":"reacted"}'
+  );
+  assert.equal(receiptOnly.cleanText, '');
+  assert.ok(receiptOnly.extractedReceipts?.includes('react_to_message'));
+});

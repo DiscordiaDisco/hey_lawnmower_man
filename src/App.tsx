@@ -89,6 +89,7 @@ import {
   syncAgentFixInboxToServer,
   stripMergedArgonLinesFromStaffOutput,
   stripMergedStaffLinesFromArgonOutput,
+  stripToolReceiptsFromVisibleText,
   loadTelemetryLocation,
   saveTelemetryLocation,
   loadTelemetryLastWeather,
@@ -3448,7 +3449,7 @@ export default function App() {
     setLoadingAudioMsgId(msg.id);
     try {
       const data = await runClientArgonTts({
-        text: msg.text,
+        text: cleaned,
         voiceName: argonVoiceName,
         speechMode: argonSpeechMode,
         vocalStylePrompt: argonVocalStylePrompt,
@@ -4790,8 +4791,9 @@ export default function App() {
           .slice(-25)
           .map((m) => ({
             role: m.role,
-            text: m.text,
+            text: stripToolReceiptsFromVisibleText(m.text),
             telemetryHeader: m.telemetryHeader,
+            toolReceipts: m.toolReceipts || m.toolResultsSummary,
             toolResultsSummary: m.toolResultsSummary,
             images: m.images,
             voiceAudio: m.voiceAudio,
@@ -4822,7 +4824,10 @@ export default function App() {
         abortSignal: abortCtrl.signal,
         onModelPartialTurn: (partial) => {
           if (partial.text) {
-            setLatestRoomArgonReaction(partial.text);
+            const cleanPartial = stripToolReceiptsFromVisibleText(partial.text);
+            if (cleanPartial) {
+              setLatestRoomArgonReaction(cleanPartial);
+            }
           }
         },
         onArgonEyeSnapshot: async (focusArea, openModalFirst) => {
@@ -4964,9 +4969,11 @@ export default function App() {
 
       if (hasStaffOutputs) {
         // Strictly separate Argon's pre-tool bubble, each Staff Agent's standalone bubble, and Argon's post-tool bubble
-        const preArgonText = stripMergedStaffLinesFromArgonOutput(
-          String(data.preStaffArgonText || data.text || '').trim(),
-          staffNames
+        const preArgonText = stripToolReceiptsFromVisibleText(
+          stripMergedStaffLinesFromArgonOutput(
+            String(data.preStaffArgonText || data.text || '').trim(),
+            staffNames
+          )
         );
         if (preArgonText || (Array.isArray(data.toolBadges) && data.toolBadges.length > 0)) {
           const initialArgonText =
@@ -4981,6 +4988,7 @@ export default function App() {
             timestamp: nowMs,
             tokenUsage: data.tokenUsage,
             toolBadges: Array.isArray(data.toolBadges) ? data.toolBadges : undefined,
+            toolReceipts: data.toolReceipts || data.toolResultsSummary,
             toolResultsSummary: data.toolResultsSummary,
             nativeReasoning: data.nativeReasoning,
             thoughtTokens: data.thoughtTokens,
@@ -5002,9 +5010,11 @@ export default function App() {
         }
 
         data.staffOutputs.forEach((staffOut, idx) => {
-          const cleanStaffText = stripMergedArgonLinesFromStaffOutput(
-            String(staffOut.text || ''),
-            staffOut.agentName
+          const cleanStaffText = stripToolReceiptsFromVisibleText(
+            stripMergedArgonLinesFromStaffOutput(
+              String(staffOut.text || ''),
+              staffOut.agentName
+            )
           );
           if (cleanStaffText) {
             newMessages.push({
@@ -5029,9 +5039,11 @@ export default function App() {
           }
         });
 
-        const postArgonText = stripMergedStaffLinesFromArgonOutput(
-          String(data.postStaffArgonText || data.argonStaffFollowUp || '').trim(),
-          staffNames
+        const postArgonText = stripToolReceiptsFromVisibleText(
+          stripMergedStaffLinesFromArgonOutput(
+            String(data.postStaffArgonText || data.argonStaffFollowUp || '').trim(),
+            staffNames
+          )
         );
         if (postArgonText && postArgonText !== preArgonText) {
           setLatestRoomArgonReaction(postArgonText);
@@ -5042,6 +5054,8 @@ export default function App() {
             text: postArgonText,
             timestamp: nowMs + 10,
             tokenUsage: data.followUpTokenUsage || data.tokenUsage,
+            toolReceipts: data.toolReceipts || data.toolResultsSummary,
+            toolResultsSummary: data.toolResultsSummary,
             routedModel: data.routedModel || activeModelId,
             thinkingBudgetUsed:
               data.thinkingBudgetUsed !== undefined
@@ -5059,9 +5073,11 @@ export default function App() {
           });
         }
       } else {
-        const replyContent = stripMergedStaffLinesFromArgonOutput(
-          String(data.text || '').trim(),
-          staffNames
+        const replyContent = stripToolReceiptsFromVisibleText(
+          stripMergedStaffLinesFromArgonOutput(
+            String(data.text || '').trim(),
+            staffNames
+          )
         );
         const resolvedText =
           replyContent ||
@@ -5079,6 +5095,7 @@ export default function App() {
             timestamp: nowMs,
             tokenUsage: data.tokenUsage,
             toolBadges: Array.isArray(data.toolBadges) ? data.toolBadges : undefined,
+            toolReceipts: data.toolReceipts || data.toolResultsSummary,
             toolResultsSummary: data.toolResultsSummary,
             nativeReasoning: data.nativeReasoning,
             thoughtTokens: data.thoughtTokens,
@@ -5233,7 +5250,7 @@ export default function App() {
             currentReply.role === 'user'
               ? 'Hex'
               : currentReply.staffSender?.name || 'Argon',
-          textSnippet: currentReply.text.slice(0, 120),
+          textSnippet: stripToolReceiptsFromVisibleText(currentReply.text).slice(0, 120),
           timestamp: formatUserLocationTime(currentReply.timestamp, {
             timezone: userTimeZone,
             includeSeconds: false,
@@ -5495,8 +5512,9 @@ export default function App() {
           systemPrompt,
           history: workingHistory.map((m) => ({
             role: m.role,
-            text: m.text,
+            text: stripToolReceiptsFromVisibleText(m.text),
             telemetryHeader: m.telemetryHeader,
+            toolReceipts: m.toolReceipts || m.toolResultsSummary,
             toolResultsSummary: m.toolResultsSummary,
             images: m.images,
           })),
@@ -5568,9 +5586,11 @@ export default function App() {
           ? data.staffOutputs.map((s) => s.agentName)
           : [];
         const autonomousReply =
-          stripMergedStaffLinesFromArgonOutput(
-            (data.preStaffArgonText || data.text || '').trim(),
-            staffNames
+          stripToolReceiptsFromVisibleText(
+            stripMergedStaffLinesFromArgonOutput(
+              (data.preStaffArgonText || data.text || '').trim(),
+              staffNames
+            )
           ) ||
           `*I tuck the blanket higher around your shoulders while you rest in my lap, checking the barometric pressure on your phone before setting it back down.*`;
         setLatestRoomArgonReaction(autonomousReply);
@@ -5586,6 +5606,7 @@ export default function App() {
           text: autonomousReply,
           timestamp: staggeredTimestampMs,
           toolBadges: heartbeatBadges,
+          toolReceipts: data.toolReceipts || data.toolResultsSummary,
           toolResultsSummary: data.toolResultsSummary,
           routedModel: data.routedModel || activeModelId,
           thinkingBudgetUsed:
@@ -5608,9 +5629,11 @@ export default function App() {
           addedMsgs.push(autoMsg);
           if (Array.isArray(data.staffOutputs)) {
             data.staffOutputs.forEach((staffOut, idx) => {
-              const cleanStaffText = stripMergedArgonLinesFromStaffOutput(
-                String(staffOut.text || ''),
-                staffOut.agentName
+              const cleanStaffText = stripToolReceiptsFromVisibleText(
+                stripMergedArgonLinesFromStaffOutput(
+                  String(staffOut.text || ''),
+                  staffOut.agentName
+                )
               );
               if (cleanStaffText) {
                 addedMsgs.push({
@@ -7747,7 +7770,7 @@ export default function App() {
                       ↩️ Replying to {replyingTo.role === 'user' ? 'Hex' : (replyingTo.staffSender?.name || 'Argon')}
                     </span>
                     <span className="text-[#a8937b] truncate text-[11px]">
-                      {replyingTo.text.slice(0, 120)}
+                      {stripToolReceiptsFromVisibleText(replyingTo.text).slice(0, 120)}
                     </span>
                   </div>
                   <button

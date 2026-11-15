@@ -29,6 +29,9 @@ import {
   executeGeminiGenerateContent,
   executeGeminiGenerateContentStream,
   HEY_LAWNMOWER_MAN_REPO,
+  TIDAL_LOCK_REPO,
+  TIDAL_LOCK_OWNER,
+  TIDAL_LOCK_REPO_NAME,
   SANCTUARY_VAULT_BRANCH,
   ensureGithubBranchExists,
   isHeyLawnmowerManRuntimeStatePath,
@@ -67,6 +70,9 @@ export {
   executeGeminiGenerateContent,
   executeGeminiGenerateContentStream,
   HEY_LAWNMOWER_MAN_REPO,
+  TIDAL_LOCK_REPO,
+  TIDAL_LOCK_OWNER,
+  TIDAL_LOCK_REPO_NAME,
   SANCTUARY_VAULT_BRANCH,
   ensureGithubBranchExists,
   isHeyLawnmowerManRuntimeStatePath,
@@ -152,6 +158,8 @@ export const STORAGE_KEYS = {
   USER_PERSONA: 'argon_user_persona_v1',
   UI_BREADCRUMBS: 'argon_ui_breadcrumbs_v1',
   GUY_DIARY_CONTENT: 'argon_guy_diary_content_v1',
+  AUTO_CLOUD_SYNC_ENABLED: 'sanctuary_auto_cloud_sync_v1',
+  LAST_CLOUD_SYNC_AT: 'sanctuary_last_cloud_sync_at_v1',
 } as const;
 
 export type MaxHistoryTurns = 12 | 20 | 40 | 'all';
@@ -1663,7 +1671,7 @@ export const DEFAULT_STAFF_JOBS: StaffJobDescription[] = [
     id: 'job-guy-diary-recon',
     title: 'Guy Diary Recon & Commits',
     prompt:
-      'Execute multi-step reconnaissance via github_api, inspect deployed commits or live web releases, and log the receipt straight into ARGON_GUY_DIARY.md on the dedicated sanctuary-vault branch of DiscordiaDisco/hey_lawnmower_man (NEVER main) via append_guy_diary with 1-shot upsert on cheap Flash tokens.',
+      'Execute multi-step reconnaissance via github_api, inspect deployed commits or live web releases, and log the receipt straight into ARGON_GUY_DIARY.md inside private DiscordiaDisco/tidal_lock (NEVER writing private diary or runtime state to public DiscordiaDisco/hey_lawnmower_man) via append_guy_diary with 1-shot upsert on cheap Flash tokens.',
   },
   {
     id: 'job-github-pages-deploy',
@@ -2556,7 +2564,7 @@ export function buildStaffRoleplaySystemPrompt(
     `1. You are typing directly into your OWN standalone chat bubble (sender: 'staff') as ${agent.name} using standard roleplay formatting: write physical actions in *single-asterisk italics* and spoken dialogue/barks/chitters in "double quotes".`,
     `2. STRICT SPEAKER SEPARATION: Write ONLY ${agent.name}'s own actions and speech! NEVER write dialogue, narration, or reactions for Argon or Hex inside your message bubble. Argon has his own separate message bubble.`,
     `3. NEVER use or repeat a static, pre-scripted, or canned opening line. Every message must be freshly written in the moment.`,
-    `4. REAL TOOL EXECUTION & SURGICAL GITHUB PATCHING: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character! NEVER emit entire 60KB–85KB files in github_api JSON arguments—always use \`search\` on GET to inspect specific sections and \`replacements: [{ find, replace }]\` on PUT/PATCH for instant surgical commits! CRITICAL BRANCH RULE: NEVER write runtime chat state, diary entries, or sanctuary backups to DiscordiaDisco/hey_lawnmower_man \`main\` branch (it causes Google AI Studio Git merge locks); always target \`branch: "sanctuary-vault"\` or a private Gist.`,
+    `4. REAL TOOL EXECUTION & SURGICAL GITHUB PATCHING: If your assigned task (${jobName || agent.jobTitle}) involves reading/writing Lorebook drawers, compacting drawers (compact_lorebook_drawer), writing in Sanctuary Books, drawing on the Whiteboard, playing a Parlor game, swapping an avatar/sticker, submitting a Coding Agent fix ticket, calling GitHub REST API (github_api), or recording field reconnaissance in ARGON_GUY_DIARY.md (append_guy_diary), call your enabled tool(s) directly in multi-step loops and report your completed receipt in character! NEVER emit entire 60KB–85KB files in github_api JSON arguments—always use \`search\` on GET to inspect specific sections and \`replacements: [{ find, replace }]\` on PUT/PATCH for instant surgical commits! CRITICAL PRIVACY & BRANCH RULE: \`DiscordiaDisco/hey_lawnmower_man\` is a PUBLIC repository synced to GitHub Pages & Google AI Studio—NEVER write private diary entries, runtime chat state, or Sanctuary backups to \`DiscordiaDisco/hey_lawnmower_man\` (any branch). Always store private diary & Sanctuary backups in private \`DiscordiaDisco/tidal_lock\` (\`sanctuary-vault\` or \`main\`) or a private Gist.`,
   ];
 
   if (telemetryContext && telemetryContext.trim()) {
@@ -7180,7 +7188,7 @@ async function callOpenAICompatibleBrain(params: {
  * attaches live camera images, room snapshots, or recorded voice audio.
  */
 export async function runHybridGeminiPerceptionBridge(params: {
-  images?: Array<{ data: string; mimeType: string; name?: string; description?: string }>;
+  images?: Array<{ data: string; mimeType: string; name?: string; description?: string; textContent?: string }>;
   roomSnapshotDataUrl?: string | null;
   voiceAudio?: AttachedVoiceAudio | null;
   userMessageText?: string;
@@ -7194,6 +7202,10 @@ export async function runHybridGeminiPerceptionBridge(params: {
     for (const img of images) {
       if (!img || !img.data) continue;
       const resolvedMime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      if (isTextDocAttachment(resolvedMime, img.name) || img.textContent) {
+        // Plain-text / markdown / code documents are already injected verbatim into user text parts.
+        continue;
+      }
       const finalMime = isAudioAttachment(resolvedMime, img.name)
         ? normalizeAudioMimeType(resolvedMime)
         : resolvedMime;
@@ -8418,7 +8430,7 @@ export interface GuyDiaryEntryResult {
   error?: string;
 }
 
-export const DEFAULT_GUY_DIARY_TEMPLATE = `# 🕵️‍♂️ ARGON'S GUY DIARY (\`hey_lawnmower_man\`)
+export const DEFAULT_GUY_DIARY_TEMPLATE = `# 🕵️‍♂️ ARGON'S GUY DIARY (\`DiscordiaDisco/tidal_lock\`)
 *"The junk in your trunk" — Private Field Ledger & Internet Doings*
 
 ---
@@ -8427,14 +8439,14 @@ export const DEFAULT_GUY_DIARY_TEMPLATE = `# 🕵️‍♂️ ARGON'S GUY DIARY 
 /**
  * Appends a reconnaissance, commit receipt, or field telemetry entry straight into ARGON_GUY_DIARY.md.
  * Persists locally (via /api/guy-diary/append & localStorage) and commits live to GitHub
- * (DiscordiaDisco/hey_lawnmower_man/ARGON_GUY_DIARY.md on branch `sanctuary-vault`, NEVER `main`)
- * via 1-shot upsert on Flash tokens.
+ * in Argon's private repository (`DiscordiaDisco/tidal_lock/ARGON_GUY_DIARY.md` on `sanctuary-vault` or `main` if empty)
+ * — NEVER writing private diary entries to public `DiscordiaDisco/hey_lawnmower_man`.
  */
 export async function appendGuyDiaryEntry(
   params: GuyDiaryEntryInput
 ): Promise<GuyDiaryEntryResult> {
   const title = String(params.title || 'Sanctuary Reconnaissance').trim();
-  const targetRepo = String(params.targetRepo || params.target_repo || HEY_LAWNMOWER_MAN_REPO).trim();
+  const targetRepo = String(params.targetRepo || params.target_repo || TIDAL_LOCK_REPO).trim();
   const commitReceipt = String(params.commitReceipt || params.commit_receipt || '1-Shot Upsert verified live').trim();
   const payload = String(params.payload || 'Reconnaissance & field telemetry logged.').trim();
   const fieldNote = String(params.fieldNote || params.field_note || 'No notes recorded.').trim();
@@ -8462,6 +8474,7 @@ export async function appendGuyDiaryEntry(
       const data = await res.json();
       if (data && data.success) {
         let ghResult: GithubApiExecutionResult | null = null;
+        let effectiveBranch = vaultBranch;
         const token =
           params.githubToken ||
           (typeof localStorage !== 'undefined'
@@ -8471,20 +8484,21 @@ export async function appendGuyDiaryEntry(
             : '');
         if (token && token.trim()) {
           try {
-            await ensureGithubBranchExists({
-              owner: 'DiscordiaDisco',
-              repo: 'hey_lawnmower_man',
+            const branchRes = await ensureGithubBranchExists({
+              owner: TIDAL_LOCK_OWNER,
+              repo: TIDAL_LOCK_REPO_NAME,
               branch: vaultBranch,
               token: token.trim(),
             });
+            effectiveBranch = branchRes.ok && branchRes.branch ? branchRes.branch : vaultBranch;
             ghResult = await executeGithubApi({
-              endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md`,
+              endpoint: `/repos/${TIDAL_LOCK_REPO}/contents/ARGON_GUY_DIARY.md`,
               method: 'PUT',
-              branch: vaultBranch,
+              branch: effectiveBranch,
               body: JSON.stringify({
                 message: `chore(diary): Entry #${data.entryNumber} — ${title} [via ${author}]`,
                 content: data.fullDiary,
-                branch: vaultBranch,
+                branch: effectiveBranch,
               }),
               token: token.trim(),
             });
@@ -8500,7 +8514,7 @@ export async function appendGuyDiaryEntry(
           entryNumber: data.entryNumber,
           entryMarkdown: data.entryBlock,
           fullDiary: data.fullDiary,
-          branch: vaultBranch,
+          branch: ghResult?.branch || effectiveBranch,
           githubSync: ghResult,
         };
       }
@@ -8541,7 +8555,7 @@ export async function appendGuyDiaryEntry(
     '',
     `## Entry #${entryNumberStr} — ${title}`,
     `- **Timestamp:** ${nowFormatted}${loc}`,
-    `- **Target Repo:** \`${targetRepo}\` (vault branch: \`${vaultBranch}\`)`,
+    `- **Target Repo:** \`${targetRepo}\` (private ledger: \`${TIDAL_LOCK_REPO}\` · branch: \`${vaultBranch}\`)`,
     `- **Commit Receipt:** \`${commitReceipt}\``,
     `- **Payload:** ${payload}`,
     `- **Field Note:** ${fieldNote}`,
@@ -8554,6 +8568,7 @@ export async function appendGuyDiaryEntry(
   }
 
   let ghResult: GithubApiExecutionResult | null = null;
+  let effectiveBranch = vaultBranch;
   const token =
     params.githubToken ||
     (typeof localStorage !== 'undefined'
@@ -8563,20 +8578,21 @@ export async function appendGuyDiaryEntry(
       : '');
   if (token && token.trim()) {
     try {
-      await ensureGithubBranchExists({
-        owner: 'DiscordiaDisco',
-        repo: 'hey_lawnmower_man',
+      const branchRes = await ensureGithubBranchExists({
+        owner: TIDAL_LOCK_OWNER,
+        repo: TIDAL_LOCK_REPO_NAME,
         branch: vaultBranch,
         token: token.trim(),
       });
+      effectiveBranch = branchRes.ok && branchRes.branch ? branchRes.branch : vaultBranch;
       ghResult = await executeGithubApi({
-        endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md`,
+        endpoint: `/repos/${TIDAL_LOCK_REPO}/contents/ARGON_GUY_DIARY.md`,
         method: 'PUT',
-        branch: vaultBranch,
+        branch: effectiveBranch,
         body: JSON.stringify({
           message: `chore(diary): Entry #${entryNumberStr} — ${title} [via ${author}]`,
           content: fullDiary,
-          branch: vaultBranch,
+          branch: effectiveBranch,
         }),
         token: token.trim(),
       });
@@ -8590,7 +8606,7 @@ export async function appendGuyDiaryEntry(
     entryNumber: entryNumberStr,
     entryMarkdown: entryBlock,
     fullDiary,
-    branch: vaultBranch,
+    branch: ghResult?.branch || effectiveBranch,
     githubSync: ghResult,
   };
 }
@@ -8598,9 +8614,10 @@ export async function appendGuyDiaryEntry(
 export const SANCTUARY_VAULT_SYNC_PATH = 'sanctuary-vault/sanctuary_live_sync.json';
 
 /**
- * Backs up complete Sanctuary live state exclusively onto the dedicated `sanctuary-vault` branch
- * of `DiscordiaDisco/hey_lawnmower_man` (auto-creating `sanctuary-vault` if missing).
- * NEVER commits runtime state to `main`, keeping AI Studio two-way Git sync clean and conflict-free.
+ * Backs up complete Sanctuary live state exclusively into Argon's PRIVATE repository `DiscordiaDisco/tidal_lock`
+ * (branch `sanctuary-vault`, or `main` if `tidal_lock` is newly initialized/empty).
+ * NEVER commits private runtime state to public `DiscordiaDisco/hey_lawnmower_man`,
+ * keeping both public privacy and AI Studio two-way Git sync clean.
  */
 export async function pushSanctuaryStateToVaultBranch(params: {
   githubToken: string;
@@ -8608,6 +8625,7 @@ export async function pushSanctuaryStateToVaultBranch(params: {
   commitMessage?: string;
 }): Promise<{
   ok: boolean;
+  repo: string;
   branch: string;
   path: string;
   status?: number;
@@ -8618,6 +8636,7 @@ export async function pushSanctuaryStateToVaultBranch(params: {
   if (!cleanToken) {
     return {
       ok: false,
+      repo: TIDAL_LOCK_REPO,
       branch: SANCTUARY_VAULT_BRANCH,
       path: SANCTUARY_VAULT_SYNC_PATH,
       error: 'Missing GitHub token',
@@ -8626,39 +8645,42 @@ export async function pushSanctuaryStateToVaultBranch(params: {
 
   try {
     const branchRes = await ensureGithubBranchExists({
-      owner: 'DiscordiaDisco',
-      repo: 'hey_lawnmower_man',
+      owner: TIDAL_LOCK_OWNER,
+      repo: TIDAL_LOCK_REPO_NAME,
       branch: SANCTUARY_VAULT_BRANCH,
       token: cleanToken,
     });
     if (!branchRes.ok) {
       return {
         ok: false,
+        repo: TIDAL_LOCK_REPO,
         branch: SANCTUARY_VAULT_BRANCH,
         path: SANCTUARY_VAULT_SYNC_PATH,
-        error: branchRes.error || 'Could not ensure sanctuary-vault branch',
+        error: branchRes.error || 'Could not ensure sanctuary-vault branch in tidal_lock',
       };
     }
 
+    const targetBranch = branchRes.branch || SANCTUARY_VAULT_BRANCH;
     const message =
       params.commitMessage ||
-      `chore(sanctuary-vault): Auto-backup Sanctuary state (${params.payload.syncedAtFormatted})`;
+      `chore(${targetBranch}): Auto-backup Sanctuary state (${params.payload.syncedAtFormatted})`;
 
     const ghRes = await executeGithubApi({
-      endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/${SANCTUARY_VAULT_SYNC_PATH}`,
+      endpoint: `/repos/${TIDAL_LOCK_REPO}/contents/${SANCTUARY_VAULT_SYNC_PATH}`,
       method: 'PUT',
-      branch: SANCTUARY_VAULT_BRANCH,
+      branch: targetBranch,
       body: JSON.stringify({
         message,
         content: JSON.stringify(params.payload, null, 2),
-        branch: SANCTUARY_VAULT_BRANCH,
+        branch: targetBranch,
       }),
       token: cleanToken,
     });
 
     return {
       ok: ghRes.ok,
-      branch: SANCTUARY_VAULT_BRANCH,
+      repo: TIDAL_LOCK_REPO,
+      branch: ghRes.branch || targetBranch,
       path: SANCTUARY_VAULT_SYNC_PATH,
       status: ghRes.status,
       commitSha: ghRes.commitSha,
@@ -8667,6 +8689,7 @@ export async function pushSanctuaryStateToVaultBranch(params: {
   } catch (err: unknown) {
     return {
       ok: false,
+      repo: TIDAL_LOCK_REPO,
       branch: SANCTUARY_VAULT_BRANCH,
       path: SANCTUARY_VAULT_SYNC_PATH,
       error: err instanceof Error ? err.message : String(err),
@@ -8678,47 +8701,84 @@ export async function pullSanctuaryStateFromVaultBranch(params: {
   githubToken: string;
 }): Promise<{
   ok: boolean;
+  repo: string;
   branch: string;
   payload?: SanctuaryLiveSyncPayload;
   error?: string;
 }> {
   const cleanToken = (params.githubToken || '').trim();
   if (!cleanToken) {
-    return { ok: false, branch: SANCTUARY_VAULT_BRANCH, error: 'Missing GitHub token' };
-  }
-  try {
-    const ghRes = await executeGithubApi({
-      endpoint: `/repos/DiscordiaDisco/hey_lawnmower_man/contents/${SANCTUARY_VAULT_SYNC_PATH}`,
-      method: 'GET',
+    return {
+      ok: false,
+      repo: TIDAL_LOCK_REPO,
       branch: SANCTUARY_VAULT_BRANCH,
-      token: cleanToken,
-    });
-    if (!ghRes.ok) {
+      error: 'Missing GitHub token',
+    };
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${cleanToken}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  try {
+    let usedBranch = SANCTUARY_VAULT_BRANCH;
+    let res = await fetch(
+      `https://api.github.com/repos/${TIDAL_LOCK_REPO}/contents/${SANCTUARY_VAULT_SYNC_PATH}?ref=${encodeURIComponent(SANCTUARY_VAULT_BRANCH)}`,
+      { method: 'GET', headers }
+    );
+    if (!res.ok && res.status === 404) {
+      const mainRes = await fetch(
+        `https://api.github.com/repos/${TIDAL_LOCK_REPO}/contents/${SANCTUARY_VAULT_SYNC_PATH}?ref=main`,
+        { method: 'GET', headers }
+      );
+      if (mainRes.ok) {
+        res = mainRes;
+        usedBranch = 'main';
+      }
+    }
+    if (!res.ok) {
+      const errData = (await res.json().catch(() => null)) as any;
       return {
         ok: false,
-        branch: SANCTUARY_VAULT_BRANCH,
-        error: ghRes.error || `GitHub GET HTTP ${ghRes.status}`,
+        repo: TIDAL_LOCK_REPO,
+        branch: usedBranch,
+        error: errData?.message || `GitHub GET HTTP ${res.status}`,
       };
     }
-    const dataObj = ghRes.data as any;
-    const rawContent =
-      typeof dataObj?.decodedContent === 'string'
-        ? dataObj.decodedContent
-        : typeof dataObj?.content === 'string'
-        ? decodeURIComponent(escape(atob(String(dataObj.content).replace(/\s+/g, ''))))
-        : '';
+
+    const dataObj = (await res.json().catch(() => null)) as any;
+    let rawContent = '';
+    if (typeof dataObj?.decodedContent === 'string') {
+      rawContent = dataObj.decodedContent;
+    } else if (typeof dataObj?.content === 'string' && dataObj.content.trim()) {
+      rawContent = decodeGithubBase64Utf8(String(dataObj.content));
+    } else if (typeof dataObj?.git_url === 'string' && dataObj.git_url) {
+      // GitHub Contents API omits `content` for files > 1 MB; fetch raw blob via `git_url`
+      const blobRes = await fetch(dataObj.git_url, { method: 'GET', headers });
+      if (blobRes.ok) {
+        const blobJson = (await blobRes.json().catch(() => null)) as any;
+        if (typeof blobJson?.content === 'string') {
+          rawContent = decodeGithubBase64Utf8(String(blobJson.content));
+        }
+      }
+    }
+
     const extracted = extractSanctuaryLiveSyncPayload(rawContent);
     if (!extracted) {
       return {
         ok: false,
-        branch: SANCTUARY_VAULT_BRANCH,
-        error: 'Could not parse sanctuary_live_sync.json from sanctuary-vault branch',
+        repo: TIDAL_LOCK_REPO,
+        branch: usedBranch,
+        error: `Could not parse sanctuary_live_sync.json from ${TIDAL_LOCK_REPO} (${usedBranch})`,
       };
     }
-    return { ok: true, branch: SANCTUARY_VAULT_BRANCH, payload: extracted };
+    return { ok: true, repo: TIDAL_LOCK_REPO, branch: usedBranch, payload: extracted };
   } catch (err: unknown) {
     return {
       ok: false,
+      repo: TIDAL_LOCK_REPO,
       branch: SANCTUARY_VAULT_BRANCH,
       error: err instanceof Error ? err.message : String(err),
     };
@@ -9476,7 +9536,7 @@ export async function runClientStaffTask(params: {
       ) {
         const title = String(args.title || 'Sanctuary Reconnaissance').trim();
         const targetRepo = String(
-          args.target_repo || args.targetRepo || 'DiscordiaDisco/hey_lawnmower_man'
+          args.target_repo || args.targetRepo || TIDAL_LOCK_REPO
         ).trim();
         const commitReceipt = String(
           args.commit_receipt || args.commitReceipt || '1-Shot Upsert verified live'
@@ -10171,6 +10231,9 @@ export async function runClientChatTurn(params: {
 
   const recentMediaCutoffTurnIdx = Math.max(0, effectiveHistory.length - 3);
   let retainedHistoryMediaTurns = 0;
+  // Retain full untruncated document attachments (.txt, .md, .json, .csv, etc.) for at least the last 2 turns (up to last 5 history entries)
+  const recentDocCutoffTurnIdx = Math.max(0, effectiveHistory.length - 5);
+  let retainedHistoryDocTurns = 0;
 
   for (let turnIdx = 0; turnIdx < effectiveHistory.length; turnIdx++) {
     const turn = effectiveHistory[turnIdx];
@@ -10178,7 +10241,13 @@ export async function runClientChatTurn(params: {
     const parts: Part[] = [];
     const allowRecentInlineMedia =
       turnIdx >= recentMediaCutoffTurnIdx && retainedHistoryMediaTurns < 2;
+    const isActiveTailUserTurn =
+      turnIdx === effectiveHistory.length - 1 && turn.role === 'user';
+    const allowFullDocInHistory =
+      isActiveTailUserTurn ||
+      (turnIdx >= recentDocCutoffTurnIdx && retainedHistoryDocTurns < 2);
     let usedInlineMediaThisTurn = false;
+    let usedFullDocThisTurn = false;
 
     if (turn.images && Array.isArray(turn.images)) {
       for (let imgIdx = 0; imgIdx < turn.images.length; imgIdx++) {
@@ -10252,13 +10321,30 @@ export async function runClientChatTurn(params: {
             text: `[SAVED PDF ATTACHMENT for "${img.name || 'document.pdf'}": ${pdfNote}]\n\n`,
           });
         } else if (img.textContent || isTextDocAttachment(mime, img.name)) {
-          const docSummary =
-            (img.textContent ? `Document excerpt:\n${img.textContent.slice(0, 800)}` : '') ||
-            img.description ||
-            `Text document "${img.name || 'document'}" (${mime}${sizeLabel})`;
-          parts.push({
-            text: `[SAVED DOCUMENT ATTACHMENT for "${img.name || 'document'}":\n${docSummary}]\n\n`,
-          });
+          const decodedFromBase64 =
+            (!img.textContent || img.textContent.length === 0) && imgData
+              ? decodeGithubBase64Utf8(imgData)
+              : '';
+          const fullDocText =
+            typeof img.textContent === 'string' && img.textContent.length > 0
+              ? img.textContent
+              : decodedFromBase64;
+          if (allowFullDocInHistory && fullDocText) {
+            parts.push({
+              text: `[ATTACHED DOCUMENT / TEXT FILE: "${img.name || 'document'}"${sizeLabel}]:\n\`\`\`\n${fullDocText}\n\`\`\`\n\n`,
+            });
+            usedFullDocThisTurn = true;
+          } else {
+            const docSummary =
+              (fullDocText
+                ? `Document excerpt (${fullDocText.length} chars):\n${fullDocText.slice(0, 800)}`
+                : '') ||
+              img.description ||
+              `Text document "${img.name || 'document'}" (${mime}${sizeLabel})`;
+            parts.push({
+              text: `[SAVED DOCUMENT ATTACHMENT for "${img.name || 'document'}":\n${docSummary}]\n\n`,
+            });
+          }
         } else {
           if (canAttachInline && mime) {
             parts.push({
@@ -10313,6 +10399,9 @@ export async function runClientChatTurn(params: {
     }
     if (usedInlineMediaThisTurn) {
       retainedHistoryMediaTurns++;
+    }
+    if (usedFullDocThisTurn) {
+      retainedHistoryDocTurns++;
     }
     // Keep ground-truth tool receipts in hidden system context rather than prepending tags inside role='model' turns
     // so Gemini never mimics raw receipt headers/tags at Token 0 of its new response.
@@ -10399,15 +10488,22 @@ export async function runClientChatTurn(params: {
         currentParts.push({ text: pdfNote });
         attachedDescriptions.push(`Hex attached PDF document "${img.name || 'document.pdf'}"`);
       } else if (img.textContent || isTextDocAttachment(mime, img.name)) {
-        let textBody = img.textContent;
-        if (!textBody && img.data) {
-          try {
-            textBody = atob(img.data);
-          } catch {
-            textBody = '';
-          }
+        const cachedDoc =
+          !img.data && img.textContent === undefined
+            ? getSessionImage(`current_${curImgIdx}`)
+            : undefined;
+        const resolvedDocData = img.data || cachedDoc?.data || '';
+        const textBody =
+          typeof img.textContent === 'string' && img.textContent.length > 0
+            ? img.textContent
+            : resolvedDocData
+            ? decodeGithubBase64Utf8(resolvedDocData)
+            : '';
+        if (resolvedDocData) {
+          storeSessionImage(`current_${curImgIdx}`, resolvedDocData, mime || 'text/plain');
         }
-        const docNote = `[ATTACHED DOCUMENT / TEXT FILE: Hex attached "${img.name || 'document'}"]:\n\`\`\`\n${textBody || '(empty document)'}\n\`\`\``;
+        const docSizeLabel = img.size ? ` (${Math.round(img.size / 1024)} KB)` : '';
+        const docNote = `[ATTACHED DOCUMENT / TEXT FILE: Hex attached "${img.name || 'document'}"${docSizeLabel}]:\n\`\`\`\n${textBody || '(empty document)'}\n\`\`\``;
         currentParts.push({ text: docNote });
         attachedDescriptions.push(`Hex attached document "${img.name || 'document'}"`);
       } else {
@@ -11605,7 +11701,7 @@ export async function runClientChatTurn(params: {
       ) {
         const title = String(args.title || 'Sanctuary Reconnaissance').trim();
         const targetRepo = String(
-          args.target_repo || args.targetRepo || 'DiscordiaDisco/hey_lawnmower_man'
+          args.target_repo || args.targetRepo || TIDAL_LOCK_REPO
         ).trim();
         const commitReceipt = String(
           args.commit_receipt || args.commitReceipt || '1-Shot Upsert verified live'
@@ -13814,7 +13910,7 @@ export function isTextDocAttachment(mimeType: string, fileName = ''): boolean {
   const normMime = String(mimeType || '').toLowerCase();
   const normName = String(fileName || '');
   if (normMime.startsWith('text/') || normMime === 'application/json' || normMime === 'text/csv') return true;
-  return /\.(txt|md|json|csv|py|js|ts|tsx|jsx|html|css|yaml|yml)$/i.test(normName);
+  return /\.(txt|md|json|csv|tsv|log|py|js|ts|tsx|jsx|html|css|yaml|yml|xml|sql|sh|cfg|conf|ini|env)$/i.test(normName);
 }
 
 export function isPdfAttachment(mimeType: string, fileName = ''): boolean {
@@ -16030,6 +16126,23 @@ export async function readItemFromPhoneFolder(
 // Replaces GitHub Gist / PAT dependency with direct local file sync.
 // ============================================================================
 
+export interface SanctuarySyncedSettings {
+  selectedPresetModel?: string;
+  customModelId?: string;
+  staffBrainModel?: string;
+  maxHistoryTurns?: MaxHistoryTurns;
+  thinkingLevel?: ThinkingLevel;
+  thinkingBudget?: number;
+  argonAvatarMode?: ArgonAvatarMode;
+  hexAvatarDesc?: string;
+  argonVoiceName?: ArgonVoiceName;
+  argonSpeechMode?: ArgonSpeechMode;
+  argonVocalStylePrompt?: string;
+  autoSpeakArgon?: boolean;
+  heartbeatConfig?: AutonomousHeartbeatConfig;
+  toolPermissionMatrix?: ToolPermissionMatrix;
+}
+
 export interface SanctuaryLiveSyncPayload {
   format: 'argon_sanctuary_live_sync';
   version: number;
@@ -16049,11 +16162,126 @@ export interface SanctuaryLiveSyncPayload {
   systemPrompt?: string;
   staffAgents?: StaffAgent[];
   staffJobs?: StaffJobDescription[];
+  recentMessages?: ChatMessage[];
+  appSettings?: SanctuarySyncedSettings;
+}
+
+export function loadAutoCloudSyncEnabled(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return true;
+    const saved = localStorage.getItem(STORAGE_KEYS.AUTO_CLOUD_SYNC_ENABLED);
+    if (saved === 'false') return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+export function saveAutoCloudSyncEnabled(enabled: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(STORAGE_KEYS.AUTO_CLOUD_SYNC_ENABLED, String(Boolean(enabled)));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadLastCloudSyncAt(): number | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(STORAGE_KEYS.LAST_CLOUD_SYNC_AT);
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLastCloudSyncAt(ts: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(STORAGE_KEYS.LAST_CLOUD_SYNC_AT, String(ts));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Strips heavy base64 media blobs from chat messages before including them in backup JSON
+ * (keeps message text, toolBadges, toolReceipts, attachment filenames, and recent small text docs)
+ * and explicitly guarantees zero API keys or secrets are present.
+ */
+export function sanitizeMessagesForCloudSync(
+  messages?: ChatMessage[],
+  maxMessages = 40
+): ChatMessage[] | undefined {
+  if (!Array.isArray(messages) || messages.length === 0) return undefined;
+  const sliced = messages.slice(-Math.max(1, maxMessages));
+  return sliced.map((msg, idx) => {
+    const keepSmallDocText = idx >= Math.max(0, sliced.length - 4);
+    return {
+      ...msg,
+      images: Array.isArray(msg.images)
+        ? msg.images.map((im) => ({
+            ...im,
+            data: '',
+            textContent:
+              keepSmallDocText && typeof im.textContent === 'string' && im.textContent.length <= 24000
+                ? im.textContent
+                : typeof im.textContent === 'string'
+                ? im.textContent.slice(0, 800)
+                : undefined,
+          }))
+        : undefined,
+      voiceAudio: msg.voiceAudio
+        ? {
+            ...msg.voiceAudio,
+            data: '',
+          }
+        : undefined,
+    };
+  });
+}
+
+function collectNonSecretSyncedSettings(override?: SanctuarySyncedSettings): SanctuarySyncedSettings {
+  const fromStorage: SanctuarySyncedSettings = {};
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const m = localStorage.getItem(STORAGE_KEYS.MODEL);
+      if (m) fromStorage.selectedPresetModel = m;
+      const sm = localStorage.getItem(STORAGE_KEYS.STAFF_MODEL);
+      if (sm) fromStorage.staffBrainModel = sm;
+      fromStorage.maxHistoryTurns = loadMaxHistoryTurns();
+      fromStorage.thinkingLevel = loadThinkingLevel();
+      fromStorage.thinkingBudget = loadThinkingBudget();
+      const am = localStorage.getItem(STORAGE_KEYS.ARGON_AVATAR_MODE);
+      if (am) fromStorage.argonAvatarMode = am as ArgonAvatarMode;
+      const hd = localStorage.getItem(STORAGE_KEYS.HEX_AVATAR_DESC);
+      if (hd) fromStorage.hexAvatarDesc = hd;
+      const vn = localStorage.getItem(STORAGE_KEYS.ARGON_VOICE_NAME);
+      if (vn && isValidArgonVoiceName(vn)) fromStorage.argonVoiceName = vn;
+      const sp = localStorage.getItem(STORAGE_KEYS.ARGON_SPEECH_MODE);
+      if (sp === 'dialogue_only' || sp === 'full_clean') fromStorage.argonSpeechMode = sp;
+      fromStorage.argonVocalStylePrompt = loadArgonVocalStylePrompt();
+      const as = localStorage.getItem(STORAGE_KEYS.ARGON_AUTO_SPEAK);
+      if (as === 'true' || as === 'false') fromStorage.autoSpeakArgon = as === 'true';
+      fromStorage.heartbeatConfig = loadAutonomousHeartbeatConfig();
+      fromStorage.toolPermissionMatrix = loadToolPermissionMatrix();
+    } catch {
+      // ignore storage errors in test environments
+    }
+  }
+  return {
+    ...fromStorage,
+    ...(override || {}),
+  };
 }
 
 /**
  * Compiles a complete, clean sanctuary_live_sync.json backup payload.
  * Pulls from provided arguments or falls back to in-memory / persisted localStorage caches.
+ * NEVER includes API keys, GitHub tokens, or secret credentials.
  */
 export function compileSanctuaryLiveSyncPayload(params?: {
   lorebook?: LorebookMap;
@@ -16069,6 +16297,8 @@ export function compileSanctuaryLiveSyncPayload(params?: {
   systemPrompt?: string;
   staffAgents?: StaffAgent[];
   staffJobs?: StaffJobDescription[];
+  recentMessages?: ChatMessage[];
+  appSettings?: SanctuarySyncedSettings;
 }): SanctuaryLiveSyncPayload {
   let lorebook = params?.lorebook;
   if (!lorebook && typeof localStorage !== 'undefined') {
@@ -16135,6 +16365,21 @@ export function compileSanctuaryLiveSyncPayload(params?: {
     }
   }
 
+  let sourceMessages = params?.recentMessages;
+  if (!sourceMessages && typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.CHAT_HISTORY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) sourceMessages = parsed;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  const recentMessages = sanitizeMessagesForCloudSync(sourceMessages, 40);
+  const appSettings = collectNonSecretSyncedSettings(params?.appSettings);
+
   const now = Date.now();
   return {
     format: 'argon_sanctuary_live_sync',
@@ -16155,6 +16400,8 @@ export function compileSanctuaryLiveSyncPayload(params?: {
     systemPrompt,
     staffAgents,
     staffJobs,
+    recentMessages,
+    appSettings,
   };
 }
 
@@ -16218,6 +16465,13 @@ export function extractSanctuaryLiveSyncPayload(
     const safeStrokes = Array.isArray(parsed.whiteboardStrokes)
       ? parsed.whiteboardStrokes
       : undefined;
+    const safeRecentMessages = Array.isArray(parsed.recentMessages)
+      ? parsed.recentMessages
+      : undefined;
+    const safeAppSettings =
+      parsed.appSettings && typeof parsed.appSettings === 'object'
+        ? (parsed.appSettings as SanctuarySyncedSettings)
+        : undefined;
     const now = typeof parsed.syncedAt === 'number' ? parsed.syncedAt : Date.now();
 
     return {
@@ -16239,6 +16493,8 @@ export function extractSanctuaryLiveSyncPayload(
       systemPrompt: typeof parsed.systemPrompt === 'string' ? parsed.systemPrompt : undefined,
       staffAgents: Array.isArray(parsed.staffAgents) ? parsed.staffAgents : undefined,
       staffJobs: Array.isArray(parsed.staffJobs) ? parsed.staffJobs : undefined,
+      recentMessages: safeRecentMessages,
+      appSettings: safeAppSettings,
     };
   }
 
@@ -16323,6 +16579,11 @@ export function extractSanctuaryLiveSyncPayload(
     systemPrompt: typeof parsed.systemPrompt === 'string' ? parsed.systemPrompt : undefined,
     staffAgents: Array.isArray(parsed.staffAgents) ? parsed.staffAgents : undefined,
     staffJobs: Array.isArray(parsed.staffJobs) ? parsed.staffJobs : undefined,
+    recentMessages: Array.isArray(parsed.recentMessages) ? parsed.recentMessages : undefined,
+    appSettings:
+      parsed.appSettings && typeof parsed.appSettings === 'object'
+        ? (parsed.appSettings as SanctuarySyncedSettings)
+        : undefined,
   };
 }
 
@@ -16919,9 +17180,9 @@ export function saveChatHistoryToLocalStorage<T extends { images?: any[]; voiceA
 ): boolean {
   if (typeof localStorage === 'undefined' || !Array.isArray(messages)) return false;
 
-  // Tier 1: Retain recent 2 media turns
+  // Tier 1: Retain recent 4 messages (last 2+ user/model turns)
   try {
-    const candidate = stripHeavyAttachmentsForLocalStorage(messages, 2);
+    const candidate = stripHeavyAttachmentsForLocalStorage(messages, 4);
     localStorage.setItem(STORAGE_KEYS.CHAT_HISTORY, JSON.stringify(candidate));
     return true;
   } catch {
@@ -17043,10 +17304,18 @@ export function mergeChatHistoryFromIndexedDB(
     if (!currentMsg) return idbMsg;
 
     const idbHasImages = Boolean(
-      idbMsg.images?.some((im) => im.data && im.data.length > 200)
+      idbMsg.images?.some(
+        (im) =>
+          (im.data && im.data.length > 200) ||
+          (typeof im.textContent === 'string' && im.textContent.length > 0)
+      )
     );
     const currentHasImages = Boolean(
-      currentMsg.images?.some((im) => im.data && im.data.length > 200)
+      currentMsg.images?.some(
+        (im) =>
+          (im.data && im.data.length > 200) ||
+          (typeof im.textContent === 'string' && im.textContent.length > 0)
+      )
     );
     const idbHasAudio = Boolean(
       idbMsg.voiceAudio?.data && idbMsg.voiceAudio.data.length > 200

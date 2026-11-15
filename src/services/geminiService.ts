@@ -866,7 +866,7 @@ export const githubApiDeclaration: FunctionDeclaration = {
 export const appendGuyDiaryDeclaration: FunctionDeclaration = {
   name: 'append_guy_diary',
   description:
-    'Appends a private reconnaissance, commit receipt, or internet doings field note into Argon’s Guy Diary (`ARGON_GUY_DIARY.md` on the dedicated `sanctuary-vault` branch of DiscordiaDisco/hey_lawnmower_man — NEVER committing to `main` so AI Studio Git sync stays clean).',
+    'Appends a private reconnaissance, commit receipt, or internet doings field note into Argon’s Guy Diary (`ARGON_GUY_DIARY.md` inside Argon’s private repository `DiscordiaDisco/tidal_lock`, branch `sanctuary-vault` or `main` — NEVER writing private diary entries to public `DiscordiaDisco/hey_lawnmower_man`).',
   parameters: {
     type: Type.OBJECT,
     description: 'Argon Guy Diary reconnaissance entry fields',
@@ -877,7 +877,7 @@ export const appendGuyDiaryDeclaration: FunctionDeclaration = {
       },
       target_repo: {
         type: Type.STRING,
-        description: 'Target repository or website if applicable (e.g. "DiscordiaDisco/sugarpeonies", "DiscordiaDisco/hey_lawnmower_man").',
+        description: 'Target repository or website the reconnaissance/commit refers to (defaults to private "DiscordiaDisco/tidal_lock"). Private diary entries are always saved inside DiscordiaDisco/tidal_lock.',
       },
       commit_receipt: {
         type: Type.STRING,
@@ -1347,6 +1347,9 @@ export const reactToMessageDeclaration: FunctionDeclaration = {
 };
 
 export const HEY_LAWNMOWER_MAN_REPO = 'DiscordiaDisco/hey_lawnmower_man';
+export const TIDAL_LOCK_REPO = 'DiscordiaDisco/tidal_lock';
+export const TIDAL_LOCK_OWNER = 'DiscordiaDisco';
+export const TIDAL_LOCK_REPO_NAME = 'tidal_lock';
 export const SANCTUARY_VAULT_BRANCH = 'sanctuary-vault';
 
 export interface GithubApiExecutionResult {
@@ -1369,6 +1372,7 @@ export interface GithubApiExecutionResult {
   commitSha?: string;
   branch?: string;
   branchRedirectedFromMain?: boolean;
+  repoRedirectedFromPublic?: boolean;
 }
 
 const HEY_LAWNMOWER_MAN_RUNTIME_STATE_FILENAMES = new Set([
@@ -1386,8 +1390,9 @@ const HEY_LAWNMOWER_MAN_RUNTIME_STATE_FILENAMES = new Set([
 
 /**
  * Checks whether a GitHub `/contents/` endpoint targets a live runtime state / diary / vault file
- * inside `DiscordiaDisco/hey_lawnmower_man`. Writing runtime state to `main` causes AI Studio
- * GitHub two-way merge locks, so writes must target `sanctuary-vault`.
+ * inside `DiscordiaDisco/hey_lawnmower_man` (which is PUBLIC & synced to AI Studio).
+ * Private diary entries and Sanctuary runtime backups MUST NEVER be committed to public `hey_lawnmower_man`;
+ * writes matching this check are redirected to private `DiscordiaDisco/tidal_lock`.
  */
 export function isHeyLawnmowerManRuntimeStatePath(endpoint: string): boolean {
   const clean = String(endpoint || '').split('?')[0].trim();
@@ -1414,6 +1419,8 @@ export function isHeyLawnmowerManRuntimeStatePath(endpoint: string): boolean {
 
 /**
  * Ensures a branch (e.g. `sanctuary-vault`) exists on GitHub, branching from `main` / default branch if 404.
+ * If private `DiscordiaDisco/tidal_lock` is completely empty (no commits yet on `main`), falls back cleanly
+ * to `main` so the first Contents API PUT initializes the repository without failing on `/git/refs`.
  */
 export async function ensureGithubBranchExists(params: {
   owner: string;
@@ -1421,7 +1428,14 @@ export async function ensureGithubBranchExists(params: {
   branch?: string;
   token: string;
   timeoutMs?: number;
-}): Promise<{ ok: boolean; branch: string; created: boolean; sha?: string; error?: string }> {
+}): Promise<{
+  ok: boolean;
+  branch: string;
+  created: boolean;
+  sha?: string;
+  fallbackToDefaultBranch?: boolean;
+  error?: string;
+}> {
   const owner = params.owner.trim();
   const repo = params.repo.trim();
   const branch = (params.branch || SANCTUARY_VAULT_BRANCH).trim() || SANCTUARY_VAULT_BRANCH;
@@ -1430,6 +1444,9 @@ export async function ensureGithubBranchExists(params: {
   if (!owner || !repo || !token) {
     return { ok: false, branch, created: false, error: 'Missing owner, repo, or GitHub token' };
   }
+
+  const isPrivateTidalLock =
+    owner.toLowerCase() === 'discordiadisco' && repo.toLowerCase() === 'tidal_lock';
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -1471,6 +1488,14 @@ export async function ensureGithubBranchExists(params: {
       timeoutMs
     );
     if (!baseRefRes.ok) {
+      if (isPrivateTidalLock && (baseRefRes.status === 404 || baseRefRes.status === 409)) {
+        return {
+          ok: true,
+          branch: baseBranch,
+          created: false,
+          fallbackToDefaultBranch: true,
+        };
+      }
       return {
         ok: false,
         branch,
@@ -1481,6 +1506,14 @@ export async function ensureGithubBranchExists(params: {
     const baseRefJson = (await baseRefRes.json().catch(() => null)) as any;
     const baseSha = String(baseRefJson?.object?.sha || '').trim();
     if (!baseSha) {
+      if (isPrivateTidalLock) {
+        return {
+          ok: true,
+          branch: baseBranch,
+          created: false,
+          fallbackToDefaultBranch: true,
+        };
+      }
       return { ok: false, branch, created: false, error: `Missing SHA on base branch "${baseBranch}"` };
     }
 
@@ -1632,7 +1665,7 @@ export async function executeGithubApi(params: {
 
   const timeoutMs = params.timeoutMs ?? 45000;
   const rawEndpoint = String(params.endpoint || '').trim();
-  const baseEndpoint = rawEndpoint.startsWith('/') ? rawEndpoint : `/${rawEndpoint}`;
+  let baseEndpoint = rawEndpoint.startsWith('/') ? rawEndpoint : `/${rawEndpoint}`;
 
   let parsedBodyObj: Record<string, unknown> | null = null;
   if (params.body) {
@@ -1667,18 +1700,23 @@ export async function executeGithubApi(params: {
     ''
   ).trim();
 
-  // Protect DiscordiaDisco/hey_lawnmower_man `main` branch from AI Studio GitHub two-way merge locks:
-  // redirect live runtime state / diary / vault writes off `main` onto `sanctuary-vault`.
+  // Protect public DiscordiaDisco/hey_lawnmower_man (Pages deploy + AI Studio sync):
+  // NEVER write private diary entries or live Sanctuary state to public hey_lawnmower_man.
+  // Redirect all runtime state/diary writes onto private DiscordiaDisco/tidal_lock.
   let branchRedirectedFromMain = false;
+  let repoRedirectedFromPublic = false;
   const isWriteMethod =
     requestedMethod === 'PUT' || requestedMethod === 'PATCH' || requestedMethod === 'DELETE';
-  if (
-    isWriteMethod &&
-    isHeyLawnmowerManRuntimeStatePath(baseEndpoint) &&
-    (!effectiveBranch || effectiveBranch.toLowerCase() === 'main')
-  ) {
-    effectiveBranch = SANCTUARY_VAULT_BRANCH;
-    branchRedirectedFromMain = true;
+  if (isWriteMethod && isHeyLawnmowerManRuntimeStatePath(baseEndpoint)) {
+    baseEndpoint = baseEndpoint.replace(
+      /^\/repos\/DiscordiaDisco\/hey_lawnmower_man\/contents\//i,
+      `/repos/${TIDAL_LOCK_REPO}/contents/`
+    );
+    repoRedirectedFromPublic = true;
+    if (!effectiveBranch || effectiveBranch.toLowerCase() === 'main') {
+      effectiveBranch = SANCTUARY_VAULT_BRANCH;
+      branchRedirectedFromMain = true;
+    }
   }
 
   const effectiveSearch = (
@@ -1846,6 +1884,8 @@ export async function executeGithubApi(params: {
             timeoutMs,
           });
           if (ensured.ok) {
+            effectiveBranch = ensured.branch || SANCTUARY_VAULT_BRANCH;
+            putPayload.branch = effectiveBranch;
             putRes = await fetchWithTimeout(
               `https://api.github.com${cleanPutEndpoint}`,
               {
@@ -1888,6 +1928,7 @@ export async function executeGithubApi(params: {
         commitSha: commitSha || undefined,
         branch: effectiveBranch || undefined,
         branchRedirectedFromMain,
+        repoRedirectedFromPublic,
         data: putRes.ok
           ? {
               patchMode: true,
@@ -1898,6 +1939,7 @@ export async function executeGithubApi(params: {
               path: putData?.content?.path,
               branch: effectiveBranch || undefined,
               branchRedirectedFromMain,
+              repoRedirectedFromPublic,
               fileSha: newFileSha,
               commitSha,
               htmlUrl: putData?.content?.html_url || putData?.commit?.html_url,
@@ -2016,21 +2058,24 @@ export async function executeGithubApi(params: {
           timeoutMs,
         });
         if (ensured.ok) {
-          // Also re-check SHA on newly created branch before retrying PUT
-          try {
-            const recheckUrl = `${url}${url.includes('?') ? '&' : '?'}ref=${encodeURIComponent(SANCTUARY_VAULT_BRANCH)}`;
-            const recheckRes = await fetchWithTimeout(recheckUrl, { method: 'GET', headers: authHeaders }, timeoutMs);
-            if (recheckRes.ok && preparedBody) {
-              const recheckJson = (await recheckRes.json().catch(() => null)) as { sha?: string } | null;
-              if (recheckJson?.sha) {
-                const parsedRetry = JSON.parse(preparedBody);
-                parsedRetry.sha = recheckJson.sha;
-                parsedRetry.branch = SANCTUARY_VAULT_BRANCH;
-                preparedBody = JSON.stringify(parsedRetry);
+          const retryBranch = ensured.branch || SANCTUARY_VAULT_BRANCH;
+          effectiveBranch = retryBranch;
+          if (preparedBody) {
+            try {
+              const parsedRetry = JSON.parse(preparedBody);
+              parsedRetry.branch = retryBranch;
+              const recheckUrl = `${url}${url.includes('?') ? '&' : '?'}ref=${encodeURIComponent(retryBranch)}`;
+              const recheckRes = await fetchWithTimeout(recheckUrl, { method: 'GET', headers: authHeaders }, timeoutMs);
+              if (recheckRes.ok) {
+                const recheckJson = (await recheckRes.json().catch(() => null)) as { sha?: string } | null;
+                if (recheckJson?.sha) {
+                  parsedRetry.sha = recheckJson.sha;
+                }
               }
+              preparedBody = JSON.stringify(parsedRetry);
+            } catch {
+              // ignore
             }
-          } catch {
-            // ignore
           }
           res = await fetchWithTimeout(
             url,
@@ -2136,6 +2181,7 @@ export async function executeGithubApi(params: {
       commitSha: extractedCommitSha,
       branch: effectiveBranch || undefined,
       branchRedirectedFromMain,
+      repoRedirectedFromPublic,
       data,
       error: res.ok
         ? undefined

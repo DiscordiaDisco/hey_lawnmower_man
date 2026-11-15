@@ -608,7 +608,7 @@ async function startServer() {
         fs.writeFileSync(
           runtimeFile,
           [
-            '# 🕵️‍♂️ ARGON\'S GUY DIARY (`hey_lawnmower_man`)',
+            '# 🕵️‍♂️ ARGON\'S GUY DIARY (`DiscordiaDisco/tidal_lock`)',
             '*"The junk in your trunk" — Private Field Ledger & Internet Doings*',
             '',
             '---',
@@ -640,7 +640,7 @@ async function startServer() {
     try {
       const {
         title = 'Sanctuary Reconnaissance',
-        target_repo = 'DiscordiaDisco/hey_lawnmower_man',
+        target_repo = 'DiscordiaDisco/tidal_lock',
         targetRepo,
         commit_receipt = 'Verified locally',
         commitReceipt,
@@ -653,7 +653,7 @@ async function startServer() {
         branch = 'sanctuary-vault',
       } = req.body || {};
 
-      const finalTargetRepo = target_repo || targetRepo || 'DiscordiaDisco/hey_lawnmower_man';
+      const finalTargetRepo = target_repo || targetRepo || 'DiscordiaDisco/tidal_lock';
       const finalCommitReceipt = commit_receipt || commitReceipt || 'Verified locally';
       const finalFieldNote = field_note || fieldNote || 'No notes recorded.';
       const finalAuthor = author || 'Argon';
@@ -690,7 +690,7 @@ async function startServer() {
         '',
         `## Entry #${entryNumberStr} — ${title}`,
         `- **Timestamp:** ${nowFormatted}${locationStamp}`,
-        `- **Target Repo:** \`${finalTargetRepo}\` (vault branch: \`${finalBranch}\`)`,
+        `- **Target Repo:** \`${finalTargetRepo}\` (private ledger: \`DiscordiaDisco/tidal_lock\` · branch: \`${finalBranch}\`)`,
         `- **Commit Receipt:** \`${finalCommitReceipt}\``,
         `- **Payload:** ${payload}`,
         `- **Field Note:** ${finalFieldNote}`,

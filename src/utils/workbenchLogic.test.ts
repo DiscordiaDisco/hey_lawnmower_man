@@ -3441,13 +3441,13 @@ test('True Auto Phone Sync & hey_lawnmower_man sanctuary-vault Branch Protection
       }
       return new Response(JSON.stringify({ object: { sha: 'vault_branch_sha_111' } }), { status: 200 });
     }
-    if (method === 'GET' && urlStr.endsWith('/repos/DiscordiaDisco/hey_lawnmower_man')) {
+    if (method === 'GET' && urlStr.endsWith('/repos/DiscordiaDisco/tidal_lock')) {
       return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
     }
     if (method === 'GET' && urlStr.includes('/git/ref/heads/main')) {
       return new Response(JSON.stringify({ object: { sha: 'main_head_sha_000' } }), { status: 200 });
     }
-    if (method === 'POST' && urlStr.includes('/git/refs')) {
+    if (method === 'POST' && urlStr.includes('/repos/DiscordiaDisco/tidal_lock/git/refs')) {
       branchCreated = true;
       return new Response(JSON.stringify({ ref: 'refs/heads/sanctuary-vault', object: { sha: 'main_head_sha_000' } }), { status: 201 });
     }
@@ -3460,9 +3460,10 @@ test('True Auto Phone Sync & hey_lawnmower_man sanctuary-vault Branch Protection
       return new Response(JSON.stringify({ message: 'File does not exist yet' }), { status: 404 });
     }
 
-    // File PUT on sanctuary-vault
+    // File PUT on tidal_lock sanctuary-vault (NEVER public hey_lawnmower_man)
     if (method === 'PUT' && urlStr.includes('/contents/')) {
-      assert.equal(parsedBody?.branch, SANCTUARY_VAULT_BRANCH, 'PUT must NEVER target main!');
+      assert.ok(urlStr.includes('/repos/DiscordiaDisco/tidal_lock/contents/'), 'Runtime state PUT must target private tidal_lock!');
+      assert.equal(parsedBody?.branch, SANCTUARY_VAULT_BRANCH, 'PUT must NEVER target main on existing repo!');
       if (!branchCreated) {
         return new Response(
           JSON.stringify({ message: 'Branch sanctuary-vault not found' }),
@@ -3482,7 +3483,7 @@ test('True Auto Phone Sync & hey_lawnmower_man sanctuary-vault Branch Protection
   }) as typeof fetch;
 
   try {
-    // Explicit branch: "main" attempt on ARGON_GUY_DIARY.md gets forcefully redirected to `sanctuary-vault`
+    // Explicit branch: "main" attempt on hey_lawnmower_man ARGON_GUY_DIARY.md gets forcefully redirected to private tidal_lock (`sanctuary-vault`)
     const diaryPutRes = await executeGithubApi({
       endpoint: '/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md',
       method: 'PUT',
@@ -3498,19 +3499,22 @@ test('True Auto Phone Sync & hey_lawnmower_man sanctuary-vault Branch Protection
     assert.equal(diaryPutRes.ok, true);
     assert.equal(diaryPutRes.branch, SANCTUARY_VAULT_BRANCH);
     assert.equal(diaryPutRes.branchRedirectedFromMain, true);
-    assert.equal(branchCreated, true, 'sanctuary-vault branch should be auto-created from main HEAD');
+    assert.equal(diaryPutRes.repoRedirectedFromPublic, true);
+    assert.ok(diaryPutRes.endpoint.includes('/repos/DiscordiaDisco/tidal_lock/contents/ARGON_GUY_DIARY.md'));
+    assert.equal(branchCreated, true, 'sanctuary-vault branch should be auto-created on tidal_lock');
 
-    // pushSanctuaryStateToVaultBranch commits exclusively to sanctuary-vault/sanctuary_live_sync.json on sanctuary-vault
+    // pushSanctuaryStateToVaultBranch commits exclusively to tidal_lock sanctuary-vault/sanctuary_live_sync.json
     const vaultBackupRes = await pushSanctuaryStateToVaultBranch({
       githubToken: 'ghp_test_token',
       payload: compiled,
     });
     assert.equal(vaultBackupRes.ok, true);
+    assert.equal(vaultBackupRes.repo, 'DiscordiaDisco/tidal_lock');
     assert.equal(vaultBackupRes.branch, SANCTUARY_VAULT_BRANCH);
     assert.equal(vaultBackupRes.path, 'sanctuary-vault/sanctuary_live_sync.json');
 
-    const anyMainPut = ghCalls.some((c) => c.method === 'PUT' && c.body?.branch === 'main');
-    assert.equal(anyMainPut, false, 'NO PUT commit may ever target main on hey_lawnmower_man');
+    const anyPublicPut = ghCalls.some((c) => c.method === 'PUT' && c.url.includes('hey_lawnmower_man'));
+    assert.equal(anyPublicPut, false, 'NO runtime state PUT commit may ever target public hey_lawnmower_man');
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -3965,6 +3969,400 @@ test('Chat media preservation: multi-round tool loop retains current-turn inline
     globalThis.fetch = origFetch;
   }
 });
+
+test('Active-turn & recent 2-turn document attachments (GALATEA.txt) NEVER truncate to 800-char excerpts and decode UTF-8 losslessly', async () => {
+  const {
+    runClientChatTurn,
+    encodeGithubUtf8Base64,
+    SEED_ARGON_BOOK,
+    SEED_HEX_BOOK,
+    SEED_LOREBOOK_DRAWERS,
+    DEFAULT_STAFF_AGENTS,
+    mergeChatHistoryFromIndexedDB,
+  } = await import('./workbenchLogic.js');
+
+  const galateaMarkerTail = 'END_OF_GALATEA_MANUSCRIPT_TAIL_SIGIL_9942_“smart_quotes_—_emdash”';
+  const galateaText = `${'LINE 001 — Galatea sculpture marble dust & pulse.\n'.repeat(80)}${galateaMarkerTail}`;
+  assert.ok(galateaText.length > 3200, 'Test fixture should exceed old 400/800 char truncation cutoffs');
+
+  const recentDocText = `${'RECENT_NOTES_SECTION — Keep every line intact.\n'.repeat(55)}END_OF_RECENT_NOTES_771`;
+  const oldDocText = `${'ARCHIVE_TURN_ZERO_OLD_DOC — Should compact in older history.\n'.repeat(45)}OLD_DOC_TAIL_NEVER_FULL`;
+
+  const origFetch = globalThis.fetch;
+  const capturedRequests: Array<{ contents: any[] }> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    if (urlStr.includes('generativelanguage.googleapis.com')) {
+      const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+      capturedRequests.push({ contents: Array.isArray(parsedBody.contents) ? parsedBody.contents : [] });
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [{ text: '*I read every word down to the final sigil.* "Got the full GALATEA manuscript."' }],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    // 1. Test active turn (base64 UTF-8 only, no pre-populated textContent) + history spanning old (>5 ago) & recent (<2 turns ago) docs
+    const encodedGalatea = encodeGithubUtf8Base64(galateaText);
+    const turnRes = await runClientChatTurn({
+      model: 'gemini-4-argon',
+      customApiKey: 'AIzaTestFakeKey123456',
+      systemPrompt: 'You are Argon.',
+      history: [
+        {
+          id: 'u-old',
+          role: 'user',
+          text: 'Very old document',
+          images: [{ mimeType: 'text/plain', data: '', textContent: oldDocText, name: 'ARCHIVE.txt' }],
+        },
+        { id: 'm-1', role: 'model', text: '*Noted archive.*' },
+        { id: 'u-2', role: 'user', text: 'Filler 1' },
+        { id: 'm-2', role: 'model', text: '*Reply 1.*' },
+        { id: 'u-3', role: 'user', text: 'Filler 2' },
+        { id: 'm-3', role: 'model', text: '*Reply 2.*' },
+        {
+          id: 'u-recent',
+          role: 'user',
+          text: 'Check recent notes',
+          images: [{ mimeType: 'text/markdown', data: '', textContent: recentDocText, name: 'RECENT.md' }],
+        },
+        { id: 'm-recent', role: 'model', text: '*Checking notes.*' },
+      ],
+      userMessageText: 'Read GALATEA.txt all the way to the end.',
+      images: [
+        {
+          mimeType: 'text/plain',
+          data: encodedGalatea,
+          name: 'GALATEA.txt',
+          size: galateaText.length,
+        },
+      ],
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonAvatarMode: 'default',
+      hexAvatarDesc: 'Hex avatar',
+      staffAgents: DEFAULT_STAFF_AGENTS,
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+    });
+
+    assert.ok(turnRes.text.includes('Got the full GALATEA manuscript'));
+    assert.equal(capturedRequests.length, 1);
+
+    const reqContents = capturedRequests[0].contents;
+    const oldTurnText = (reqContents[0].parts || []).map((p: any) => p.text || '').join('\n');
+    const recentTurnText = (reqContents[6].parts || []).map((p: any) => p.text || '').join('\n');
+    const activeTurnText = (reqContents[reqContents.length - 1].parts || []).map((p: any) => p.text || '').join('\n');
+
+    // Old turn (>5 history messages back) compacts cleanly
+    assert.ok(oldTurnText.includes('[SAVED DOCUMENT ATTACHMENT for "ARCHIVE.txt"'));
+    assert.equal(oldTurnText.includes('OLD_DOC_TAIL_NEVER_FULL'), false);
+
+    // Recent turn within last 2 turns retains full untruncated document text
+    assert.ok(recentTurnText.includes('END_OF_RECENT_NOTES_771'), 'Recent history doc turn must retain full text');
+    assert.equal(recentTurnText.includes('[SAVED DOCUMENT ATTACHMENT'), false);
+
+    // Active turn receives FULL UTF-8 text (including em-dash and smart quotes) and NEVER [SAVED DOCUMENT ATTACHMENT]
+    assert.ok(activeTurnText.includes(galateaMarkerTail), 'Active turn doc MUST include full tail & UTF-8 punctuation');
+    assert.equal(activeTurnText.includes('[SAVED DOCUMENT ATTACHMENT'), false);
+
+    // 2. mergeChatHistoryFromIndexedDB restores stripped/missing textContent from IndexedDB
+    const merged = mergeChatHistoryFromIndexedDB(
+      [{ id: 'u-doc-1', role: 'user', text: 'Doc', timestamp: 1000, images: [{ mimeType: 'text/plain', data: '', name: 'GALATEA.txt' }] }],
+      [{ id: 'u-doc-1', role: 'user', text: 'Doc', timestamp: 1000, images: [{ mimeType: 'text/plain', data: '', name: 'GALATEA.txt', textContent: galateaText }] }]
+    );
+    assert.equal(merged[0].images?.[0]?.textContent, galateaText);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Auto-Sync Everything payload captures librarySpines, recentMessages, non-secret appSettings, and excludes all API secrets', async () => {
+  const {
+    compileSanctuaryLiveSyncPayload,
+    extractSanctuaryLiveSyncPayload,
+    loadAutoCloudSyncEnabled,
+    saveAutoCloudSyncEnabled,
+    sanitizeMessagesForCloudSync,
+    SEED_ARGON_BOOK,
+    SEED_HEX_BOOK,
+    SEED_LOREBOOK_DRAWERS,
+  } = await import('./workbenchLogic.js');
+
+  const mockStore = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => mockStore.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      mockStore.set(k, v);
+    },
+    removeItem: (k: string) => {
+      mockStore.delete(k);
+    },
+  };
+
+  try {
+    // Store mock secrets in localStorage to ensure compileSanctuaryLiveSyncPayload NEVER leaks them into sync JSON
+    mockStore.set('sanctuary_gemini_key', 'AIzaSUPERSECRET_NEVER_SYNC');
+    mockStore.set('argon_gh_token', 'ghp_SUPERSECRET_NEVER_SYNC');
+    mockStore.set('sanctuary_deepseek_key', 'sk-deepseek-secret-never-sync');
+
+    // Toggle persistence defaults true and toggles cleanly
+    assert.equal(loadAutoCloudSyncEnabled(), true);
+    saveAutoCloudSyncEnabled(false);
+    assert.equal(loadAutoCloudSyncEnabled(), false);
+    saveAutoCloudSyncEnabled(true);
+    assert.equal(loadAutoCloudSyncEnabled(), true);
+
+    const sanitizedMsgs = sanitizeMessagesForCloudSync([
+      {
+        id: 'm1',
+        role: 'user',
+        text: 'Hello with big image & doc',
+        timestamp: 1000,
+        images: [
+          { mimeType: 'image/png', data: 'A'.repeat(5000), name: 'shot.png' },
+          { mimeType: 'text/plain', data: 'B'.repeat(400), textContent: 'Short note', name: 'note.txt' },
+        ],
+        voiceAudio: { mimeType: 'audio/mp4', data: 'C'.repeat(3000), durationSec: 5 },
+      },
+    ]);
+    assert.ok(sanitizedMsgs && sanitizedMsgs.length === 1);
+    assert.equal(sanitizedMsgs[0].images?.[0]?.data, '');
+    assert.equal(sanitizedMsgs[0].images?.[1]?.textContent, 'Short note');
+    assert.equal(sanitizedMsgs[0].voiceAudio?.data, '');
+
+    const compiled = compileSanctuaryLiveSyncPayload({
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+      librarySpines: {
+        'book-1': {
+          id: 'book-1',
+          title: 'Dark Apothecary Canon',
+          color: '#D4AF37',
+          content: 'Canon spine text',
+          updatedAt: 5555,
+        } as any,
+      },
+      recentMessages: sanitizedMsgs,
+      appSettings: {
+        selectedPresetModel: 'gemini-4-argon',
+        thinkingLevel: 'high',
+        argonVoiceName: 'Orus',
+        autoSpeakArgon: true,
+      },
+    });
+
+    const jsonStr = JSON.stringify(compiled);
+    assert.equal(jsonStr.includes('AIzaSUPERSECRET_NEVER_SYNC'), false, 'Cloud/Phone sync MUST NEVER leak Gemini key');
+    assert.equal(jsonStr.includes('ghp_SUPERSECRET_NEVER_SYNC'), false, 'Cloud/Phone sync MUST NEVER leak GitHub PAT');
+    assert.equal(jsonStr.includes('sk-deepseek-secret-never-sync'), false, 'Cloud/Phone sync MUST NEVER leak DeepSeek key');
+
+    const extracted = extractSanctuaryLiveSyncPayload(jsonStr);
+    assert.ok(extracted);
+    assert.equal((extracted.librarySpines as any)?.['book-1']?.title, 'Dark Apothecary Canon');
+    assert.equal(extracted.recentMessages?.length, 1);
+    assert.equal(extracted.appSettings?.selectedPresetModel, 'gemini-4-argon');
+    assert.equal(extracted.appSettings?.thinkingLevel, 'high');
+    assert.equal(extracted.appSettings?.argonVoiceName, 'Orus');
+    assert.equal(extracted.appSettings?.autoSpeakArgon, true);
+  } finally {
+    delete (globalThis as Record<string, unknown>).localStorage;
+  }
+});
+
+test('Private Repository Routing: append_guy_diary & Sanctuary Vault target DiscordiaDisco/tidal_lock cleanly (never public hey_lawnmower_man)', async () => {
+  const {
+    TIDAL_LOCK_REPO,
+    SANCTUARY_VAULT_BRANCH,
+    appendGuyDiaryDeclaration,
+    appendGuyDiaryEntry,
+    compileSanctuaryLiveSyncPayload,
+    pushSanctuaryStateToVaultBranch,
+    pullSanctuaryStateFromVaultBranch,
+    encodeGithubUtf8Base64,
+    executeGithubApi,
+  } = await import('./workbenchLogic.js');
+
+  assert.equal(TIDAL_LOCK_REPO, 'DiscordiaDisco/tidal_lock');
+  assert.ok(appendGuyDiaryDeclaration.description?.includes('DiscordiaDisco/tidal_lock'));
+
+  const mockStore = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => mockStore.get(k) ?? null,
+    setItem: (k: string, v: string) => mockStore.set(k, String(v)),
+    removeItem: (k: string) => mockStore.delete(k),
+    clear: () => mockStore.clear(),
+  };
+
+  const origFetch = globalThis.fetch;
+  const recordedCalls: Array<{ url: string; method: string; body?: any }> = [];
+  const storedFiles = new Map<string, string>();
+
+  // Simulate brand-new empty private DiscordiaDisco/tidal_lock repo (409 on git/ref/heads/* until initial commit on main)
+  let repoInitialized = false;
+  let sanctuaryBranchCreated = false;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    const method = (init?.method || 'GET').toUpperCase();
+    const parsedBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+    recordedCalls.push({ url: urlStr, method, body: parsedBody });
+
+    if (urlStr.startsWith('/api/guy-diary/append')) {
+      return new Response('Offline in unit test', { status: 503 });
+    }
+
+    if (method === 'GET' && urlStr.endsWith('/repos/DiscordiaDisco/tidal_lock')) {
+      return new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 });
+    }
+
+    if (method === 'GET' && urlStr.includes('/repos/DiscordiaDisco/tidal_lock/git/ref/heads/')) {
+      if (!repoInitialized) {
+        return new Response(JSON.stringify({ message: 'Git Repository is empty.' }), { status: 409 });
+      }
+      if (urlStr.endsWith('/heads/main')) {
+        return new Response(JSON.stringify({ object: { sha: 'tidal_main_sha_1' } }), { status: 200 });
+      }
+      if (urlStr.endsWith('/heads/sanctuary-vault') && sanctuaryBranchCreated) {
+        return new Response(JSON.stringify({ object: { sha: 'tidal_vault_sha_2' } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    }
+
+    if (method === 'POST' && urlStr.includes('/repos/DiscordiaDisco/tidal_lock/git/refs')) {
+      sanctuaryBranchCreated = true;
+      return new Response(
+        JSON.stringify({ ref: parsedBody?.ref || 'refs/heads/sanctuary-vault', object: { sha: parsedBody?.sha || 'tidal_main_sha_1' } }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
+    if (method === 'GET' && urlStr.includes('/contents/')) {
+      const urlObj = new URL(urlStr);
+      const ref = urlObj.searchParams.get('ref') || 'main';
+      const key = `${urlObj.pathname}:${ref}`;
+      const existing = storedFiles.get(key);
+      if (existing) {
+        return new Response(
+          JSON.stringify({
+            encoding: 'base64',
+            content: encodeGithubUtf8Base64(existing),
+            sha: 'sha_existing_1',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    }
+
+    if (method === 'PUT' && urlStr.includes('/contents/')) {
+      const urlObj = new URL(urlStr);
+      const branch = parsedBody?.branch || 'main';
+      if (urlObj.pathname.includes('/repos/DiscordiaDisco/tidal_lock/contents/')) {
+        repoInitialized = true;
+        const decoded = Buffer.from(String(parsedBody?.content || ''), 'base64').toString('utf-8');
+        storedFiles.set(`${urlObj.pathname}:${branch}`, decoded);
+      }
+      return new Response(
+        JSON.stringify({
+          content: { sha: 'new_file_sha_1', path: urlObj.pathname },
+          commit: { sha: 'new_commit_sha_1' },
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
+    return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    // 1. appendGuyDiaryEntry commits ARGON_GUY_DIARY.md cleanly to DiscordiaDisco/tidal_lock (even when empty repo falls back to `main`)
+    const diaryRes = await appendGuyDiaryEntry({
+      title: 'Tidal Lock Initialization',
+      commitReceipt: 'Initial diary test',
+      payload: 'Private ledger moved off public repo',
+      fieldNote: 'Confirmed private storage works cleanly.',
+      author: 'Argon',
+      githubToken: 'ghp_private_test',
+    });
+    assert.equal(diaryRes.success, true);
+    assert.equal(diaryRes.githubSync?.ok, true);
+    assert.ok(diaryRes.githubSync?.endpoint.includes('/repos/DiscordiaDisco/tidal_lock/contents/ARGON_GUY_DIARY.md'));
+
+    // 2. Push & pull Sanctuary vault state on empty-initialized tidal_lock (`main` fallback -> pull succeeds via sanctuary-vault/main fallback)
+    const compiled = compileSanctuaryLiveSyncPayload({
+      lorebook: { '01_live_handoff.md': 'Private vault state 🔐' },
+    });
+    const pushRes = await pushSanctuaryStateToVaultBranch({
+      githubToken: 'ghp_private_test',
+      payload: compiled,
+    });
+    assert.equal(pushRes.ok, true);
+    assert.equal(pushRes.repo, 'DiscordiaDisco/tidal_lock');
+
+    const pullRes = await pullSanctuaryStateFromVaultBranch({ githubToken: 'ghp_private_test' });
+    assert.equal(pullRes.ok, true);
+    assert.equal(pullRes.repo, 'DiscordiaDisco/tidal_lock');
+    assert.equal(pullRes.payload?.lorebook['01_live_handoff.md'], 'Private vault state 🔐');
+
+    // 3. Even if called directly on public hey_lawnmower_man with `sanctuary-vault`, runtime state is redirected off public repo onto tidal_lock
+    const accidentalPublicCall = await executeGithubApi({
+      endpoint: '/repos/DiscordiaDisco/hey_lawnmower_man/contents/ARGON_GUY_DIARY.md',
+      method: 'PUT',
+      branch: SANCTUARY_VAULT_BRANCH,
+      body: JSON.stringify({
+        message: 'chore: accidental public write',
+        content: 'Private secrets',
+        branch: SANCTUARY_VAULT_BRANCH,
+      }),
+      token: 'ghp_private_test',
+    });
+    assert.equal(accidentalPublicCall.ok, true);
+    assert.equal(accidentalPublicCall.repoRedirectedFromPublic, true);
+    assert.ok(accidentalPublicCall.endpoint.includes('/repos/DiscordiaDisco/tidal_lock/contents/'));
+
+    // 4. Legitimate source code edits to public hey_lawnmower_man still target hey_lawnmower_man directly
+    const codeEditRes = await executeGithubApi({
+      endpoint: '/repos/DiscordiaDisco/hey_lawnmower_man/contents/src/App.tsx',
+      method: 'PUT',
+      branch: 'main',
+      body: JSON.stringify({
+        message: 'feat: update UI',
+        content: 'export const ok = true;',
+        branch: 'main',
+      }),
+      token: 'ghp_private_test',
+    });
+    assert.equal(codeEditRes.ok, true);
+    assert.equal(codeEditRes.repoRedirectedFromPublic, false);
+    assert.ok(codeEditRes.endpoint.includes('/repos/DiscordiaDisco/hey_lawnmower_man/contents/src/App.tsx'));
+
+    // Assert NO runtime state or diary PUT ever went to public DiscordiaDisco/hey_lawnmower_man
+    const leakedDiaryOrVaultPut = recordedCalls.some(
+      (c) =>
+        c.method === 'PUT' &&
+        c.url.includes('/repos/DiscordiaDisco/hey_lawnmower_man/') &&
+        (c.url.includes('ARGON_GUY_DIARY') || c.url.includes('sanctuary_live_sync'))
+    );
+    assert.equal(leakedDiaryOrVaultPut, false, 'Zero private diary/vault PUTs may ever hit public hey_lawnmower_man');
+  } finally {
+    globalThis.fetch = origFetch;
+    delete (globalThis as Record<string, unknown>).localStorage;
+  }
+});
+
 
 
 

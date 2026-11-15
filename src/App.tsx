@@ -198,6 +198,16 @@ import {
   toggleMessageReaction,
   sortMessagesChronologically,
   isBootMessage,
+  pullSanctuaryStateFromVaultBranch,
+  loadLibrarySpines,
+  saveLibrarySpines,
+  loadAutoCloudSyncEnabled,
+  saveAutoCloudSyncEnabled,
+  loadLastCloudSyncAt,
+  saveLastCloudSyncAt,
+  decodeGithubBase64Utf8,
+  encodeGithubUtf8Base64,
+  SanctuaryLiveSyncPayload,
 } from './utils/workbenchLogic';
 import { TicketScratchpadModal } from './components/TicketScratchpadModal';
 import { CodeCopyBlock } from './components/CodeCopyBlock';
@@ -793,8 +803,22 @@ export default function App() {
     loadLinkedSyncFileMeta()
   );
   const [localSyncRevision, setLocalSyncRevision] = useState<number>(0);
+  const [autoCloudSyncEnabled, setAutoCloudSyncEnabled] = useState<boolean>(() =>
+    loadAutoCloudSyncEnabled()
+  );
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<number | null>(() =>
+    loadLastCloudSyncAt()
+  );
+  const handleToggleAutoCloudSync = (enabled: boolean) => {
+    setAutoCloudSyncEnabled(enabled);
+    saveAutoCloudSyncEnabled(enabled);
+  };
   const autoPhoneSyncTimerRef = useRef<number | null>(null);
+  const autoCloudSyncTimerRef = useRef<number | null>(null);
   const lastAutoSyncDigestRef = useRef<string | null>(null);
+  const lastAutoCloudDigestRef = useRef<string | null>(null);
+  const cloudSyncDirtyRef = useRef<boolean>(false);
+  const cloudSyncInFlightRef = useRef<boolean>(false);
 
   // 6. Weather/Pressure & Battery Telemetry (Persisted in localStorage; defaults to Kalamazoo, Michigan)
   const [weatherCoords, setWeatherCoords] = useState<{
@@ -2381,24 +2405,178 @@ export default function App() {
       hour12: true,
     });
 
+  const compileCurrentSanctuaryPayload = (): SanctuaryLiveSyncPayload =>
+    compileSanctuaryLiveSyncPayload({
+      lorebook,
+      argonBook,
+      hexBook,
+      curios: loadCurioShelf(),
+      librarySpines: loadLibrarySpines(),
+      agentFixRequests: loadStoredAgentFixRequests(),
+      ticketScratchpad,
+      creepyShrine: loadCreepyShrineState(),
+      userPersona,
+      systemPrompt,
+      staffAgents,
+      staffJobs,
+      recentMessages: messages,
+      appSettings: {
+        selectedPresetModel,
+        customModelId,
+        staffBrainModel,
+        maxHistoryTurns,
+        thinkingLevel,
+        thinkingBudget,
+        argonAvatarMode,
+        hexAvatarDesc,
+        argonVoiceName,
+        argonSpeechMode,
+        argonVocalStylePrompt,
+        autoSpeakArgon,
+        heartbeatConfig,
+        toolPermissionMatrix,
+      },
+    });
+
+  const applySanctuaryPayloadSnapshot = (
+    payload: SanctuaryLiveSyncPayload,
+    options?: { includeChatHistory?: boolean; includeSettings?: boolean }
+  ) => {
+    const includeSettings = options?.includeSettings !== false;
+    const includeChatHistory = options?.includeChatHistory ?? false;
+
+    if (payload.lorebook && Object.keys(payload.lorebook).length > 0) {
+      setLorebook((prev) => {
+        const merged = { ...SEED_LOREBOOK_DRAWERS, ...prev, ...payload.lorebook };
+        safeLocalStorageSetItem(STORAGE_KEYS.LOREBOOK, JSON.stringify(merged));
+        return merged;
+      });
+    }
+
+    if (
+      payload.argonBook &&
+      (Array.isArray(payload.argonBook.entries) ||
+        Array.isArray(payload.argonBook.memorySection))
+    ) {
+      setArgonBook(payload.argonBook);
+      safeLocalStorageSetItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(payload.argonBook));
+    }
+
+    if (Array.isArray(payload.hexBook)) {
+      setHexBook(payload.hexBook);
+      safeLocalStorageSetItem(STORAGE_KEYS.HEX_BOOK, JSON.stringify(payload.hexBook));
+    }
+
+    if (Array.isArray(payload.curios)) {
+      saveCurioShelf(payload.curios);
+    }
+
+    if (payload.librarySpines && typeof payload.librarySpines === 'object') {
+      saveLibrarySpines(payload.librarySpines);
+    }
+
+    if (Array.isArray(payload.agentFixRequests)) {
+      setAgentFixRequests(payload.agentFixRequests);
+      saveStoredAgentFixRequests(payload.agentFixRequests);
+    }
+
+    if (payload.ticketScratchpad) {
+      setTicketScratchpad(payload.ticketScratchpad);
+      saveTicketScratchpad(payload.ticketScratchpad);
+    }
+
+    if (payload.creepyShrine) {
+      saveCreepyShrineState(payload.creepyShrine);
+    }
+
+    if (payload.userPersona) {
+      setUserPersona(payload.userPersona);
+      saveUserPersona(payload.userPersona);
+    }
+
+    if (typeof payload.systemPrompt === 'string' && payload.systemPrompt.trim()) {
+      setSystemPrompt(payload.systemPrompt);
+      safeLocalStorageSetItem(STORAGE_KEYS.SYS_PROMPT, payload.systemPrompt);
+    }
+
+    if (Array.isArray(payload.staffAgents)) {
+      setStaffAgents(payload.staffAgents);
+      safeLocalStorageSetItem(STORAGE_KEYS.STAFF_AGENTS, JSON.stringify(payload.staffAgents));
+    }
+
+    if (Array.isArray(payload.staffJobs)) {
+      setStaffJobs(payload.staffJobs);
+      safeLocalStorageSetItem(STORAGE_KEYS.STAFF_JOBS, JSON.stringify(payload.staffJobs));
+    }
+
+    if (includeSettings && payload.appSettings) {
+      const s = payload.appSettings;
+      if (s.selectedPresetModel) {
+        handleChangeActiveBrainModel(s.selectedPresetModel);
+      }
+      if (s.customModelId) {
+        setCustomModelId(s.customModelId);
+      }
+      if (s.staffBrainModel) {
+        setStaffBrainModel(s.staffBrainModel);
+        safeLocalStorageSetItem(STORAGE_KEYS.STAFF_MODEL, s.staffBrainModel);
+      }
+      if (s.maxHistoryTurns !== undefined) {
+        handleChangeMaxHistoryTurns(s.maxHistoryTurns);
+      }
+      if (s.thinkingLevel) {
+        handleChangeThinkingLevel(s.thinkingLevel);
+      }
+      if (typeof s.thinkingBudget === 'number') {
+        handleChangeThinkingBudget(s.thinkingBudget);
+      }
+      if (s.argonAvatarMode) {
+        setArgonAvatarMode(s.argonAvatarMode);
+      }
+      if (typeof s.hexAvatarDesc === 'string') {
+        setHexAvatarDesc(s.hexAvatarDesc);
+      }
+      if (s.argonVoiceName && isValidArgonVoiceName(s.argonVoiceName)) {
+        setArgonVoiceName(s.argonVoiceName);
+      }
+      if (s.argonSpeechMode) {
+        setArgonSpeechMode(s.argonSpeechMode);
+      }
+      if (typeof s.argonVocalStylePrompt === 'string' && s.argonVocalStylePrompt.trim()) {
+        handleChangeArgonVocalStylePrompt(s.argonVocalStylePrompt);
+      }
+      if (typeof s.autoSpeakArgon === 'boolean') {
+        setAutoSpeakArgon(s.autoSpeakArgon);
+      }
+      if (s.heartbeatConfig) {
+        setHeartbeatConfig(s.heartbeatConfig);
+        saveAutonomousHeartbeatConfig(s.heartbeatConfig);
+      }
+      if (s.toolPermissionMatrix) {
+        setToolPermissionMatrix(s.toolPermissionMatrix);
+        saveToolPermissionMatrix(s.toolPermissionMatrix);
+      }
+    }
+
+    if (Array.isArray(payload.recentMessages) && payload.recentMessages.length > 0) {
+      setMessages((current) => {
+        const onlyBootLocal = current.length === 0 || current.every((m) => isBootMessage(m.id));
+        if (!includeChatHistory && !onlyBootLocal) {
+          return current;
+        }
+        const merged = mergeChatHistoryFromIndexedDB(current, payload.recentMessages!);
+        persistChatMessagesImmediate(merged);
+        return merged;
+      });
+    }
+  };
+
   const handleSaveToPhoneFolder = async () => {
     setIsSyncingPhone(true);
     setLocalSyncIsError(false);
     setLocalSyncStatus('Saving to phone file…');
     try {
-      const payload = compileSanctuaryLiveSyncPayload({
-        lorebook,
-        argonBook,
-        hexBook,
-        curios: loadCurioShelf(),
-        agentFixRequests: loadStoredAgentFixRequests(),
-        ticketScratchpad,
-        creepyShrine: loadCreepyShrineState(),
-        userPersona,
-        systemPrompt,
-        staffAgents,
-        staffJobs,
-      });
+      const payload = compileCurrentSanctuaryPayload();
       const result = await writeSanctuaryLiveSyncFile(payload);
       setLocalSyncIsError(false);
       const timeStr = formatLocalSyncTime();
@@ -2426,33 +2604,55 @@ export default function App() {
     window.addEventListener('argon-local-sync-dirty', onDirty);
     window.addEventListener('argon-curio-shelf-updated', onDirty);
     window.addEventListener('argon-creepy-shrine-updated', onDirty);
+    window.addEventListener('argon-library-spines-updated', onDirty);
     window.addEventListener('argon-linked-sync-meta-updated', onMetaUpdated);
     return () => {
       window.removeEventListener('argon-local-sync-dirty', onDirty);
       window.removeEventListener('argon-curio-shelf-updated', onDirty);
       window.removeEventListener('argon-creepy-shrine-updated', onDirty);
+      window.removeEventListener('argon-library-spines-updated', onDirty);
       window.removeEventListener('argon-linked-sync-meta-updated', onMetaUpdated);
     };
   }, []);
 
-  // True Automatic Debounced Phone Sync: auto-writes sanctuary_live_sync.json whenever Books/Vault,
-  // Drawers, Persona/Settings, Curios, or Tickets change while a persistent file/folder handle is linked & connected.
+  // Build settled message digest signature for Auto-Sync Everything (avoids thrashing mid-stream)
+  const settledMessagesDigest = useMemo(() => {
+    const tail = messages.slice(-6).map((m) => `${m.id}:${m.text?.length || 0}:${m.reactions?.length || 0}`);
+    return `${messages.length}|${tail.join(',')}`;
+  }, [messages]);
+
+  // Unified Automatic Phone & IndexedDB Sync (~1.2s debounce) whenever ANY Sanctuary state changes
   useEffect(() => {
     const currentCurios = loadCurioShelf();
     const currentShrine = loadCreepyShrineState();
+    const currentSpines = loadLibrarySpines();
     const digest = JSON.stringify({
       argonBook,
       hexBook,
       lorebook,
+      settledMessagesDigest,
       userPersona,
       systemPrompt,
       staffAgents,
       staffJobs,
       selectedPresetModel,
+      staffBrainModel,
+      maxHistoryTurns,
+      thinkingLevel,
+      thinkingBudget,
+      argonAvatarMode,
+      hexAvatarDesc,
+      argonVoiceName,
+      argonSpeechMode,
+      argonVocalStylePrompt,
+      autoSpeakArgon,
+      heartbeatConfig,
+      toolPermissionMatrix,
       agentFixRequests,
       ticketScratchpad,
       curios: currentCurios,
       creepyShrine: currentShrine,
+      librarySpines: currentSpines,
     });
 
     if (lastAutoSyncDigestRef.current === null) {
@@ -2469,36 +2669,20 @@ export default function App() {
       autoPhoneSyncTimerRef.current = null;
     }
 
-    if (linkedSyncFileMeta?.status !== 'connected') {
-      lastAutoSyncDigestRef.current = digest;
-      return;
-    }
-
     autoPhoneSyncTimerRef.current = window.setTimeout(() => {
       autoPhoneSyncTimerRef.current = null;
       lastAutoSyncDigestRef.current = digest;
-      void autoWriteThroughLocalSyncDetailed(
-        {
-          lorebook,
-          argonBook,
-          hexBook,
-          curios: loadCurioShelf(),
-          agentFixRequests,
-          ticketScratchpad,
-          creepyShrine: loadCreepyShrineState(),
-          userPersona,
-          systemPrompt,
-          staffAgents,
-          staffJobs,
-        },
-        { allowPermissionPrompt: false }
-      ).then((res) => {
-        setLinkedSyncFileMeta(res.meta || loadLinkedSyncFileMeta());
-        if (res.method === 'direct_file' || res.method === 'direct_dir') {
-          setLocalSyncIsError(false);
-          setLocalSyncStatus(`✓ Auto-synced ${res.filename} (${formatLocalSyncTime()})`);
+      const allowDirectPhoneWrite = linkedSyncFileMeta?.status === 'connected';
+      const compiled = compileCurrentSanctuaryPayload();
+      void autoWriteThroughLocalSyncDetailed(compiled, { allowPermissionPrompt: false }).then(
+        (res) => {
+          setLinkedSyncFileMeta(res.meta || loadLinkedSyncFileMeta());
+          if (allowDirectPhoneWrite && (res.method === 'direct_file' || res.method === 'direct_dir')) {
+            setLocalSyncIsError(false);
+            setLocalSyncStatus(`✓ Auto-synced ${res.filename} (${formatLocalSyncTime()})`);
+          }
         }
-      });
+      );
     }, 1200);
 
     return () => {
@@ -2511,16 +2695,203 @@ export default function App() {
     argonBook,
     hexBook,
     lorebook,
+    settledMessagesDigest,
     userPersona,
     systemPrompt,
     staffAgents,
     staffJobs,
     selectedPresetModel,
+    staffBrainModel,
+    maxHistoryTurns,
+    thinkingLevel,
+    thinkingBudget,
+    argonAvatarMode,
+    hexAvatarDesc,
+    argonVoiceName,
+    argonSpeechMode,
+    argonVocalStylePrompt,
+    autoSpeakArgon,
+    heartbeatConfig,
+    toolPermissionMatrix,
     agentFixRequests,
     ticketScratchpad,
     localSyncRevision,
     linkedSyncFileMeta?.status,
   ]);
+
+  // Unified Automatic Cloud Sync (~4s debounce) to dedicated `sanctuary-vault` branch + Private Gist (NEVER commits to `main`)
+  useEffect(() => {
+    if (!autoCloudSyncEnabled || !githubToken.trim() || isSending) {
+      return;
+    }
+
+    const currentCurios = loadCurioShelf();
+    const currentShrine = loadCreepyShrineState();
+    const currentSpines = loadLibrarySpines();
+    const cloudDigest = JSON.stringify({
+      argonBook,
+      hexBook,
+      lorebook,
+      settledMessagesDigest,
+      userPersona,
+      systemPrompt,
+      staffAgents,
+      staffJobs,
+      selectedPresetModel,
+      staffBrainModel,
+      maxHistoryTurns,
+      thinkingLevel,
+      argonAvatarMode,
+      hexAvatarDesc,
+      argonVoiceName,
+      argonSpeechMode,
+      argonVocalStylePrompt,
+      autoSpeakArgon,
+      heartbeatConfig,
+      toolPermissionMatrix,
+      agentFixRequests,
+      ticketScratchpad,
+      curios: currentCurios,
+      creepyShrine: currentShrine,
+      librarySpines: currentSpines,
+    });
+
+    if (lastAutoCloudDigestRef.current === null) {
+      lastAutoCloudDigestRef.current = cloudDigest;
+      return;
+    }
+
+    if (cloudDigest === lastAutoCloudDigestRef.current) {
+      return;
+    }
+
+    cloudSyncDirtyRef.current = true;
+    if (autoCloudSyncTimerRef.current) {
+      window.clearTimeout(autoCloudSyncTimerRef.current);
+      autoCloudSyncTimerRef.current = null;
+    }
+
+    autoCloudSyncTimerRef.current = window.setTimeout(() => {
+      autoCloudSyncTimerRef.current = null;
+      if (cloudSyncInFlightRef.current) return;
+      cloudSyncInFlightRef.current = true;
+      lastAutoCloudDigestRef.current = cloudDigest;
+      const compiled = compileCurrentSanctuaryPayload();
+      const targetGistId = extractGistIdFromInput(gistId) || DEFAULT_GIST_ID;
+      const bookFiles = serializeSanctuaryBooksForGist(argonBook, hexBook);
+      const gistFiles: Record<string, { content: string }> = {
+        ...Object.fromEntries(
+          Object.entries(lorebook).map(([fname, content]) => [fname, { content }])
+        ),
+        ...bookFiles,
+      };
+      const token = githubToken.trim();
+
+      void Promise.allSettled([
+        pushSanctuaryStateToVaultBranch({
+          githubToken: token,
+          payload: compiled,
+          commitMessage: `chore(${SANCTUARY_VAULT_BRANCH}): Auto-sync Sanctuary state (${compiled.syncedAtFormatted})`,
+        }),
+        fetch(`https://api.github.com/gists/${targetGistId}`, {
+          method: 'PATCH',
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ files: gistFiles }),
+        }),
+      ])
+        .then(([vaultRes]) => {
+          cloudSyncDirtyRef.current = false;
+          const nowTs = Date.now();
+          if (vaultRes.status === 'fulfilled' && vaultRes.value.ok) {
+            saveLastCloudSyncAt(nowTs);
+            setLastCloudSyncAt(nowTs);
+            setGistSyncIsError(false);
+            setGistSyncStatus(
+              `✓ Auto-synced everything → tidal_lock (${SANCTUARY_VAULT_BRANCH}) & Gist (${formatLocalSyncTime()})`
+            );
+          }
+        })
+        .catch(() => {
+          // stay quiet when offline; local IndexedDB & phone sync remain intact
+        })
+        .finally(() => {
+          cloudSyncInFlightRef.current = false;
+        });
+    }, 4000);
+
+    return () => {
+      if (autoCloudSyncTimerRef.current) {
+        window.clearTimeout(autoCloudSyncTimerRef.current);
+        autoCloudSyncTimerRef.current = null;
+      }
+    };
+  }, [
+    autoCloudSyncEnabled,
+    githubToken,
+    gistId,
+    isSending,
+    argonBook,
+    hexBook,
+    lorebook,
+    settledMessagesDigest,
+    userPersona,
+    systemPrompt,
+    staffAgents,
+    staffJobs,
+    selectedPresetModel,
+    staffBrainModel,
+    maxHistoryTurns,
+    thinkingLevel,
+    argonAvatarMode,
+    hexAvatarDesc,
+    argonVoiceName,
+    argonSpeechMode,
+    argonVocalStylePrompt,
+    autoSpeakArgon,
+    heartbeatConfig,
+    toolPermissionMatrix,
+    agentFixRequests,
+    ticketScratchpad,
+    localSyncRevision,
+  ]);
+
+  // Flush pending local/cloud sync whenever Android Chrome backgrounds or hides the PWA
+  useEffect(() => {
+    const handleVisibilityHide = () => {
+      if (document.visibilityState !== 'hidden') return;
+      const compiled = compileCurrentSanctuaryPayload();
+      void autoWriteThroughLocalSyncDetailed(compiled, { allowPermissionPrompt: false });
+      if (
+        cloudSyncDirtyRef.current &&
+        autoCloudSyncEnabled &&
+        githubToken.trim() &&
+        !cloudSyncInFlightRef.current
+      ) {
+        cloudSyncDirtyRef.current = false;
+        void pushSanctuaryStateToVaultBranch({
+          githubToken: githubToken.trim(),
+          payload: compiled,
+          commitMessage: `chore(${SANCTUARY_VAULT_BRANCH}): Background flush Sanctuary state`,
+        }).then((res) => {
+          if (res.ok) {
+            const ts = Date.now();
+            saveLastCloudSyncAt(ts);
+            setLastCloudSyncAt(ts);
+          }
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityHide);
+    window.addEventListener('pagehide', handleVisibilityHide);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityHide);
+      window.removeEventListener('pagehide', handleVisibilityHide);
+    };
+  });
 
   const handleLoadFromPhoneFolder = async (file?: File) => {
     setIsSyncingPhone(true);
@@ -2534,69 +2905,11 @@ export default function App() {
         return;
       }
 
-      if (payload.lorebook && Object.keys(payload.lorebook).length > 0) {
-        setLorebook((prev) => {
-          const merged = { ...SEED_LOREBOOK_DRAWERS, ...prev, ...payload.lorebook };
-          safeLocalStorageSetItem(STORAGE_KEYS.LOREBOOK, JSON.stringify(merged));
-          return merged;
-        });
-      }
-
-      if (
-        payload.argonBook &&
-        (Array.isArray(payload.argonBook.entries) ||
-          Array.isArray(payload.argonBook.memorySection))
-      ) {
-        setArgonBook(payload.argonBook);
-        safeLocalStorageSetItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(payload.argonBook));
-      }
-
-      if (Array.isArray(payload.hexBook)) {
-        setHexBook(payload.hexBook);
-        safeLocalStorageSetItem(STORAGE_KEYS.HEX_BOOK, JSON.stringify(payload.hexBook));
-      }
-
-      if (Array.isArray(payload.curios)) {
-        saveCurioShelf(payload.curios);
-      }
-
-      if (Array.isArray(payload.agentFixRequests)) {
-        setAgentFixRequests(payload.agentFixRequests);
-        saveStoredAgentFixRequests(payload.agentFixRequests);
-      }
-
-      if (payload.ticketScratchpad) {
-        setTicketScratchpad(payload.ticketScratchpad);
-        saveTicketScratchpad(payload.ticketScratchpad);
-      }
-
-      if (payload.creepyShrine) {
-        saveCreepyShrineState(payload.creepyShrine);
-      }
-
-      if (payload.userPersona) {
-        setUserPersona(payload.userPersona);
-        saveUserPersona(payload.userPersona);
-      }
-
-      if (typeof payload.systemPrompt === 'string' && payload.systemPrompt.trim()) {
-        setSystemPrompt(payload.systemPrompt);
-        safeLocalStorageSetItem(STORAGE_KEYS.SYS_PROMPT, payload.systemPrompt);
-      }
-
-      if (Array.isArray(payload.staffAgents)) {
-        setStaffAgents(payload.staffAgents);
-        safeLocalStorageSetItem(STORAGE_KEYS.STAFF_AGENTS, JSON.stringify(payload.staffAgents));
-      }
-
-      if (Array.isArray(payload.staffJobs)) {
-        setStaffJobs(payload.staffJobs);
-        safeLocalStorageSetItem(STORAGE_KEYS.STAFF_JOBS, JSON.stringify(payload.staffJobs));
-      }
+      applySanctuaryPayloadSnapshot(payload, { includeChatHistory: true, includeSettings: true });
 
       setLocalSyncIsError(false);
       setLocalSyncStatus(
-        `✓ Loaded ${Object.keys(payload.lorebook || {}).length} drawers & Sanctuary Books (${formatLocalSyncTime()})`
+        `✓ Loaded ${Object.keys(payload.lorebook || {}).length} drawers, Books, Settings & Chat (${formatLocalSyncTime()})`
       );
       setLinkedSyncFileMeta(loadLinkedSyncFileMeta());
     } catch (err: unknown) {
@@ -2605,6 +2918,87 @@ export default function App() {
       setLocalSyncStatus(`✗ Phone Load Failed: ${msg}`);
     } finally {
       setIsSyncingPhone(false);
+    }
+  };
+
+  const handleSyncEverythingNow = async () => {
+    const compiled = compileCurrentSanctuaryPayload();
+    setIsSyncingPhone(true);
+    if (githubToken.trim()) setIsSyncingGist(true);
+    try {
+      const phoneRes = await autoWriteThroughLocalSyncDetailed(compiled, {
+        allowPermissionPrompt: true,
+      });
+      setLinkedSyncFileMeta(phoneRes.meta || loadLinkedSyncFileMeta());
+      if (phoneRes.method === 'direct_file' || phoneRes.method === 'direct_dir') {
+        setLocalSyncIsError(false);
+        setLocalSyncStatus(`✓ Synced ${phoneRes.filename} (${formatLocalSyncTime()})`);
+      } else {
+        setLocalSyncIsError(false);
+        setLocalSyncStatus(`✓ Saved snapshot locally (${formatLocalSyncTime()})`);
+      }
+
+      if (githubToken.trim()) {
+        const [vaultRes] = await Promise.all([
+          pushSanctuaryStateToVaultBranch({
+            githubToken: githubToken.trim(),
+            payload: compiled,
+            commitMessage: `chore(${SANCTUARY_VAULT_BRANCH}): Manual full Sanctuary sync (${compiled.syncedAtFormatted})`,
+          }),
+          pushSanctuaryBooksToGist(argonBook, hexBook, true, true),
+        ]);
+        if (vaultRes.ok) {
+          const ts = Date.now();
+          saveLastCloudSyncAt(ts);
+          setLastCloudSyncAt(ts);
+          setGistSyncIsError(false);
+          setGistSyncStatus(
+            `✓ Synced everything to Phone, tidal_lock & Gist (${formatLocalSyncTime()})`
+          );
+        } else if (vaultRes.error) {
+          setGistSyncIsError(true);
+          setGistSyncStatus(`✗ tidal_lock (${SANCTUARY_VAULT_BRANCH}) sync error: ${vaultRes.error}`);
+        }
+      }
+    } finally {
+      setIsSyncingPhone(false);
+      setIsSyncingGist(false);
+    }
+  };
+
+  const handlePullCloudVaultNow = async () => {
+    if (!githubToken.trim()) {
+      setGistSyncIsError(true);
+      setGistSyncStatus('✗ Add your GitHub Token first to restore from tidal_lock.');
+      return;
+    }
+    setIsSyncingGist(true);
+    setGistSyncIsError(false);
+    setGistSyncStatus(`Restoring full Sanctuary from tidal_lock (${SANCTUARY_VAULT_BRANCH})…`);
+    try {
+      const pullRes = await pullSanctuaryStateFromVaultBranch({ githubToken: githubToken.trim() });
+      if (!pullRes.ok || !pullRes.payload) {
+        setGistSyncIsError(true);
+        setGistSyncStatus(`✗ ${pullRes.error || 'Could not restore from tidal_lock'}`);
+        return;
+      }
+      applySanctuaryPayloadSnapshot(pullRes.payload, {
+        includeChatHistory: true,
+        includeSettings: true,
+      });
+      const ts = pullRes.payload.syncedAt || Date.now();
+      saveLastCloudSyncAt(ts);
+      setLastCloudSyncAt(ts);
+      setGistSyncIsError(false);
+      setGistSyncStatus(
+        `✓ Restored full Sanctuary from tidal_lock (${Object.keys(pullRes.payload.lorebook || {}).length} drawers + Books + Settings)`
+      );
+      showToast('Restored full Sanctuary from tidal_lock');
+    } catch (err: unknown) {
+      setGistSyncIsError(true);
+      setGistSyncStatus(`✗ Cloud restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsSyncingGist(false);
     }
   };
 
@@ -3026,15 +3420,39 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Local phone boot sync: restore cached local backup without calling GitHub API
+    // Boot Auto-Sync Check: restore cached local backup first, then pull newer cloud snapshot from `sanctuary-vault` if available
     void (async () => {
       try {
         const cached = await readSanctuaryLiveSyncFile();
         if (cached && cached.lorebook && Object.keys(cached.lorebook).length > 0) {
           setLorebook((prev) => ({ ...SEED_LOREBOOK_DRAWERS, ...cached.lorebook, ...prev }));
         }
+        const token = githubToken.trim();
+        if (token && loadAutoCloudSyncEnabled()) {
+          const lastLocalCloud = loadLastCloudSyncAt() || 0;
+          const pullRes = await pullSanctuaryStateFromVaultBranch({ githubToken: token });
+          if (
+            pullRes.ok &&
+            pullRes.payload &&
+            pullRes.payload.syncedAt > lastLocalCloud + 5000
+          ) {
+            const isFreshDevice =
+              messages.every((m) => isBootMessage(m.id)) &&
+              lastLocalCloud === 0;
+            applySanctuaryPayloadSnapshot(pullRes.payload, {
+              includeChatHistory: isFreshDevice,
+              includeSettings: isFreshDevice,
+            });
+            saveLastCloudSyncAt(pullRes.payload.syncedAt);
+            setLastCloudSyncAt(pullRes.payload.syncedAt);
+            setGistSyncIsError(false);
+            setGistSyncStatus(
+              `✓ Boot auto-synced from tidal_lock (${pullRes.payload.syncedAtFormatted})`
+            );
+          }
+        }
       } catch {
-        // ignore offline cache boot errors
+        // ignore offline boot errors
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3203,13 +3621,18 @@ export default function App() {
   };
 
   const handleNewChat = async () => {
-    // Cancel any pending debounced auto-sync timer before performing the immediate awaited flush
+    // Cancel any pending debounced auto-sync timers before performing the immediate awaited flush
     if (autoPhoneSyncTimerRef.current) {
       window.clearTimeout(autoPhoneSyncTimerRef.current);
       autoPhoneSyncTimerRef.current = null;
     }
+    if (autoCloudSyncTimerRef.current) {
+      window.clearTimeout(autoCloudSyncTimerRef.current);
+      autoCloudSyncTimerRef.current = null;
+    }
+    cloudSyncDirtyRef.current = false;
 
-    // 1. Commit Lorebook Drawers (including 01_live_handoff.md), Sanctuary Books/Journals, Persona, Curios, and Tickets
+    // 1. Commit Lorebook Drawers (including 01_live_handoff.md), Sanctuary Books/Journals, Persona, Curios, Library Spines, and Tickets
     safeLocalStorageSetItem(STORAGE_KEYS.LOREBOOK, JSON.stringify(lorebook));
     safeLocalStorageSetItem(STORAGE_KEYS.ARGON_BOOK, JSON.stringify(argonBook));
     safeLocalStorageSetItem(STORAGE_KEYS.HEX_BOOK, JSON.stringify(hexBook));
@@ -3224,23 +3647,12 @@ export default function App() {
     safeLocalStorageSetItem(STORAGE_KEYS.AGENT_FIX_REQUESTS, JSON.stringify(agentFixRequests));
     saveTicketScratchpad(ticketScratchpad);
 
+    const compiledSnapshot = compileCurrentSanctuaryPayload();
+
     // Await automatic phone sync write flush BEFORE clearing messages
-    const phoneFlushResult = await autoWriteThroughLocalSyncDetailed(
-      {
-        lorebook,
-        argonBook,
-        hexBook,
-        curios: currentCurios,
-        agentFixRequests,
-        ticketScratchpad,
-        creepyShrine: currentShrine,
-        userPersona,
-        systemPrompt,
-        staffAgents,
-        staffJobs,
-      },
-      { allowPermissionPrompt: true }
-    );
+    const phoneFlushResult = await autoWriteThroughLocalSyncDetailed(compiledSnapshot, {
+      allowPermissionPrompt: true,
+    });
     setLinkedSyncFileMeta(phoneFlushResult.meta || loadLinkedSyncFileMeta());
     if (phoneFlushResult.method === 'direct_file' || phoneFlushResult.method === 'direct_dir') {
       setLocalSyncIsError(false);
@@ -3249,29 +3661,22 @@ export default function App() {
       );
     }
 
-    // 2. Trigger private Gist & dedicated `sanctuary-vault` branch backup if GitHub token is configured (NEVER main)
+    // 2. Trigger private Gist & private DiscordiaDisco/tidal_lock vault backup if GitHub token is configured (NEVER public hey_lawnmower_man)
     if (githubToken && githubToken.trim()) {
       try {
-        await Promise.allSettled([
+        const [, vaultRes] = await Promise.allSettled([
           pushSanctuaryBooksToGist(argonBook, hexBook, true, true),
           pushSanctuaryStateToVaultBranch({
             githubToken,
-            payload: compileSanctuaryLiveSyncPayload({
-              lorebook,
-              argonBook,
-              hexBook,
-              curios: currentCurios,
-              agentFixRequests,
-              ticketScratchpad,
-              creepyShrine: currentShrine,
-              userPersona,
-              systemPrompt,
-              staffAgents,
-              staffJobs,
-            }),
+            payload: compiledSnapshot,
             commitMessage: `chore(${SANCTUARY_VAULT_BRANCH}): Auto-backup Sanctuary state before Clear Chat`,
           }),
         ]);
+        if (vaultRes.status === 'fulfilled' && vaultRes.value.ok) {
+          const ts = Date.now();
+          saveLastCloudSyncAt(ts);
+          setLastCloudSyncAt(ts);
+        }
       } catch (err) {
         console.warn('Cloud auto-backup during clear chat:', err);
       }
@@ -4042,7 +4447,7 @@ export default function App() {
           const text = String(textReader.result || '');
           let b64 = '';
           try {
-            b64 = btoa(unescape(encodeURIComponent(text)));
+            b64 = encodeGithubUtf8Base64(text);
           } catch {
             b64 = '';
           }
@@ -4062,7 +4467,7 @@ export default function App() {
         textReader.onerror = () => {
           setPendingAttachmentReads((c) => Math.max(0, c - 1));
         };
-        textReader.readAsText(file);
+        textReader.readAsText(file, 'UTF-8');
       } else {
         const reader = new FileReader();
         reader.onload = async () => {
@@ -5230,15 +5635,24 @@ export default function App() {
                     if (fullData) {
                       storeSessionImage(`${m.id}_${idx}`, fullData, storedMime);
                     }
+                    const isTextDoc =
+                      isTextDocAttachment(storedMime, im.name) || Boolean(im.textContent);
+                    const recoveredTextContent =
+                      typeof im.textContent === 'string' && im.textContent.length > 0
+                        ? im.textContent
+                        : isTextDoc && fullData
+                        ? decodeGithubBase64Utf8(fullData)
+                        : im.textContent;
                     const isPureImage =
                       storedMime.startsWith('image/') &&
                       !isAudioAttachment(storedMime, im.name) &&
                       !isVideoAttachment(storedMime, im.name) &&
                       !isPdfAttachment(storedMime, im.name) &&
-                      !isTextDocAttachment(storedMime, im.name);
+                      !isTextDoc;
                     return {
                       ...im,
                       mimeType: storedMime,
+                      textContent: recoveredTextContent,
                       imageSummary: isPureImage
                         ? im.imageSummary ||
                           (im.description ? `[Description: ${im.description}]` : undefined)
@@ -8170,6 +8584,11 @@ export default function App() {
         localSyncStatus={localSyncStatus}
         isSyncingPhone={isSyncingPhone}
         localSyncIsError={localSyncIsError}
+        autoCloudSyncEnabled={autoCloudSyncEnabled}
+        onToggleAutoCloudSync={handleToggleAutoCloudSync}
+        lastCloudSyncAt={lastCloudSyncAt}
+        onSyncEverythingNow={handleSyncEverythingNow}
+        onPullCloudVaultNow={handlePullCloudVaultNow}
         onCreateNewPrivateGist={handleCreateNewPrivateGist}
         isSyncingGist={isSyncingGist}
         gistSyncStatus={gistSyncStatus}

@@ -33,6 +33,7 @@ import {
   ensureGithubBranchExists,
   isHeyLawnmowerManRuntimeStatePath,
   normalizeInlineMediaMimeType,
+  sniffMimeTypeFromBase64,
   sanitizeGeminiContents,
   normalizeGeminiGenerateContentResult,
   extractSafeGeminiText,
@@ -69,6 +70,7 @@ export {
   SANCTUARY_VAULT_BRANCH,
   ensureGithubBranchExists,
   isHeyLawnmowerManRuntimeStatePath,
+  sniffMimeTypeFromBase64,
 };
 
 export const DEFAULT_GIST_ID = '53d05bcdd9b06cb8e2cce4efa838be09';
@@ -10008,6 +10010,7 @@ export async function runClientChatTurn(params: {
   model?: string;
   systemPrompt: string;
   history: Array<{
+    id?: string;
     role: 'user' | 'model';
     text: string;
     telemetryHeader?: string;
@@ -10166,18 +10169,47 @@ export async function runClientChatTurn(params: {
 
   const historicalToolReceiptEntries: string[] = [];
 
+  const recentMediaCutoffTurnIdx = Math.max(0, effectiveHistory.length - 3);
+  let retainedHistoryMediaTurns = 0;
+
   for (let turnIdx = 0; turnIdx < effectiveHistory.length; turnIdx++) {
     const turn = effectiveHistory[turnIdx];
     if (!turn) continue;
     const parts: Part[] = [];
+    const allowRecentInlineMedia =
+      turnIdx >= recentMediaCutoffTurnIdx && retainedHistoryMediaTurns < 2;
+    let usedInlineMediaThisTurn = false;
+
     if (turn.images && Array.isArray(turn.images)) {
       for (let imgIdx = 0; imgIdx < turn.images.length; imgIdx++) {
         const img = turn.images[imgIdx];
         if (!img) continue;
-        const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+        const cached =
+          !img.data && turn.id ? getSessionImage(`${turn.id}_${imgIdx}`) : undefined;
+        const imgData = img.data || cached?.data || '';
+        const preMime = resolveAttachmentMimeType(
+          img.name || '',
+          cached?.mimeType || img.mimeType
+        );
+        const mime =
+          (!preMime || preMime === 'application/octet-stream') && imgData
+            ? sniffMimeTypeFromBase64(imgData, preMime)
+            : preMime;
         const sizeLabel = img.size ? `, ${Math.round(img.size / 1024)} KB` : '';
+        const canAttachInline =
+          allowRecentInlineMedia && Boolean(imgData) && imgData.length <= 8_500_000;
+
         if (isAudioAttachment(mime, img.name)) {
           const cleanAudioMime = normalizeAudioMimeType(mime);
+          if (canAttachInline) {
+            parts.push({
+              inlineData: {
+                mimeType: cleanAudioMime,
+                data: imgData,
+              },
+            });
+            usedInlineMediaThisTurn = true;
+          }
           const audioNote =
             img.description && img.description.trim()
               ? `${img.description.trim()} (${cleanAudioMime}${sizeLabel})`
@@ -10186,6 +10218,15 @@ export async function runClientChatTurn(params: {
             text: `[SAVED AUDIO ATTACHMENT for "${img.name || 'audio clip'}": ${audioNote}]\n\n`,
           });
         } else if (isVideoAttachment(mime, img.name)) {
+          if (canAttachInline) {
+            parts.push({
+              inlineData: {
+                mimeType: mime,
+                data: imgData,
+              },
+            });
+            usedInlineMediaThisTurn = true;
+          }
           const videoNote =
             img.description && img.description.trim()
               ? `${img.description.trim()} (${mime}${sizeLabel})`
@@ -10194,6 +10235,15 @@ export async function runClientChatTurn(params: {
             text: `[SAVED VIDEO ATTACHMENT for "${img.name || 'video'}": ${videoNote}]\n\n`,
           });
         } else if (isPdfAttachment(mime, img.name)) {
+          if (canAttachInline) {
+            parts.push({
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: imgData,
+              },
+            });
+            usedInlineMediaThisTurn = true;
+          }
           const pdfNote =
             img.description && img.description.trim()
               ? `${img.description.trim()} (application/pdf${sizeLabel})`
@@ -10210,7 +10260,16 @@ export async function runClientChatTurn(params: {
             text: `[SAVED DOCUMENT ATTACHMENT for "${img.name || 'document'}":\n${docSummary}]\n\n`,
           });
         } else {
-          // Historical image turn where base64 is stripped: freeze saved image summary permanently so historical prefix NEVER mutates!
+          if (canAttachInline && mime) {
+            parts.push({
+              inlineData: {
+                mimeType: mime,
+                data: imgData,
+              },
+            });
+            usedInlineMediaThisTurn = true;
+          }
+          // Historical image turn summary for memory continuity
           const summary =
             img.imageSummary ||
             img.description ||
@@ -10227,9 +10286,33 @@ export async function runClientChatTurn(params: {
       }
     }
     if (turn.voiceAudio) {
-      parts.push({
-        text: '[Previous voice audio clip omitted to save tokens]\n\n',
-      });
+      const cachedVoice =
+        !turn.voiceAudio.data && turn.id
+          ? getSessionImage(`${turn.id}_voice`)
+          : undefined;
+      const voiceData = turn.voiceAudio.data || cachedVoice?.data || '';
+      if (allowRecentInlineMedia && voiceData && voiceData.length <= 8_500_000) {
+        parts.push(
+          ...buildVoiceMessageInlineParts(
+            {
+              ...turn.voiceAudio,
+              mimeType: normalizeAudioMimeType(
+                cachedVoice?.mimeType || turn.voiceAudio.mimeType
+              ),
+              data: voiceData,
+            },
+            false
+          )
+        );
+        usedInlineMediaThisTurn = true;
+      } else {
+        parts.push({
+          text: '[Previous voice audio clip omitted to save tokens]\n\n',
+        });
+      }
+    }
+    if (usedInlineMediaThisTurn) {
+      retainedHistoryMediaTurns++;
     }
     // Keep ground-truth tool receipts in hidden system context rather than prepending tags inside role='model' turns
     // so Gemini never mimics raw receipt headers/tags at Token 0 of its new response.
@@ -10271,7 +10354,11 @@ export async function runClientChatTurn(params: {
     for (let curImgIdx = 0; curImgIdx < safeImages.length; curImgIdx++) {
       const img = safeImages[curImgIdx];
       if (!img) continue;
-      const mime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      const preMime = resolveAttachmentMimeType(img.name || '', img.mimeType);
+      const mime =
+        (!preMime || preMime === 'application/octet-stream') && img.data
+          ? sniffMimeTypeFromBase64(img.data, preMime)
+          : preMime;
       if (isAudioAttachment(mime, img.name)) {
         const cleanMime = normalizeAudioMimeType(mime);
         if (img.data) {
@@ -10326,7 +10413,7 @@ export async function runClientChatTurn(params: {
       } else {
         // Image or generic inlineData
         if (img.data && mime) {
-          storeSessionImage(`current_${images.indexOf(img)}`, img.data, mime);
+          storeSessionImage(`current_${curImgIdx}`, img.data, mime);
           currentParts.push({
             inlineData: {
               mimeType: mime,
@@ -10461,6 +10548,7 @@ export async function runClientChatTurn(params: {
   if (contents.length > 26) {
     contents.splice(0, contents.length - 26);
   }
+  const currentUserTurnIdx = Math.max(0, contents.length - 1);
 
   const lowerUserText = cleanUserMessageText.toLowerCase();
   if (
@@ -11830,9 +11918,9 @@ export async function runClientChatTurn(params: {
       parts: normalizeContentPartsSpacing(responseParts),
     });
 
-    // Replace heavy inlineData parts in EARLIER turns with modality-accurate saved notes so follow-up tool turns
-    // never double-send initial turn base64 payloads, while preserving any freshly captured tool snapshot in the latest turn
-    for (let cIdx = 0; cIdx < contents.length - 1; cIdx++) {
+    // Replace heavy inlineData parts ONLY in older historical turns (strictly before Hex's current user turn)
+    // so follow-up tool rounds NEVER blind Argon to the photos/audio/video Hex sent in this turn or fresh Eye snapshots!
+    for (let cIdx = 0; cIdx < currentUserTurnIdx; cIdx++) {
       const c = contents[cIdx];
       if (c && c.role === 'user' && Array.isArray(c.parts)) {
         let mutated = false;
@@ -13686,10 +13774,15 @@ export function resolveAttachmentMimeType(fileName: string, rawMime?: string | n
   if (ext === 'txt' || raw === 'text/plain') return 'text/plain';
 
   // Common image formats
-  if (ext === 'png') return 'image/png';
-  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
-  if (ext === 'webp') return 'image/webp';
-  if (ext === 'gif') return 'image/gif';
+  if (ext === 'png' || raw === 'image/png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg' || raw === 'image/jpg' || raw === 'image/jpeg') return 'image/jpeg';
+  if (ext === 'webp' || raw === 'image/webp') return 'image/webp';
+  if (ext === 'gif' || raw === 'image/gif') return 'image/gif';
+  if (ext === 'heic' || raw === 'image/heic') return 'image/heic';
+  if (ext === 'heif' || raw === 'image/heif') return 'image/heif';
+  if (ext === 'avif' || raw === 'image/avif') return 'image/avif';
+  if (ext === 'bmp' || raw === 'image/bmp') return 'image/bmp';
+  if (ext === 'svg' || raw === 'image/svg+xml') return 'image/svg+xml';
   if (raw.startsWith('image/')) return raw;
 
   return raw || 'application/octet-stream';

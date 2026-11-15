@@ -113,6 +113,7 @@ import {
   formatAudioDurationLabel,
   normalizeAudioMimeType,
   resolveAttachmentMimeType,
+  sniffMimeTypeFromBase64,
   isAudioAttachment,
   isVideoAttachment,
   isTextDocAttachment,
@@ -159,6 +160,7 @@ import {
   generateImageSummaryAndOcr,
   MediaVaultItem,
   findVaultItemMatch,
+  readMediaVaultItem,
   addMediaVaultItem,
   detectMediaCategory,
   ChatMessageReplyInfo,
@@ -1685,6 +1687,7 @@ export default function App() {
   const chatInputRef = useRef<WorkbenchChatInputHandle | null>(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState<number>(40);
   const [attachedImages, setAttachedImages] = useState<AttachedImageItem[]>([]);
+  const [pendingAttachmentReads, setPendingAttachmentReads] = useState<number>(0);
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [isVaultOpen, setIsVaultOpen] = useState<boolean>(initialModalSession.showVaultModal);
   const [isStickerTrayOpen, setIsStickerTrayOpen] = useState<boolean>(false);
@@ -3949,8 +3952,85 @@ export default function App() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    const fileList = Array.from(files);
+    e.target.value = '';
 
-    Array.from(files).forEach((file) => {
+    setPendingAttachmentReads((c) => c + fileList.length);
+
+    const normalizeOversizedOrExoticRasterImage = (
+      dataUrl: string,
+      mimeType: string,
+      fileSize: number
+    ): Promise<{ base64Data: string; mimeType: string; size: number } | null> => {
+      const needsConversion =
+        mimeType === 'image/bmp' ||
+        mimeType === 'image/avif' ||
+        mimeType === 'image/tiff' ||
+        mimeType === 'image/heic' ||
+        mimeType === 'image/heif' ||
+        fileSize > 2.5 * 1024 * 1024;
+      if (!needsConversion || mimeType === 'image/gif' || mimeType === 'image/svg+xml') {
+        return Promise.resolve(null);
+      }
+      return new Promise((resolve) => {
+        try {
+          const imgEl = new Image();
+          imgEl.onload = () => {
+            try {
+              const maxDim = 2048;
+              let w = imgEl.naturalWidth || imgEl.width;
+              let h = imgEl.naturalHeight || imgEl.height;
+              if (!w || !h) {
+                resolve(null);
+                return;
+              }
+              if (w > maxDim || h > maxDim) {
+                if (w >= h) {
+                  h = Math.round((h * maxDim) / w);
+                  w = maxDim;
+                } else {
+                  w = Math.round((w * maxDim) / h);
+                  h = maxDim;
+                }
+              }
+              const canvas = document.createElement('canvas');
+              canvas.width = w;
+              canvas.height = h;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                resolve(null);
+                return;
+              }
+              ctx.drawImage(imgEl, 0, 0, w, h);
+              const jpegUrl = canvas.toDataURL('image/jpeg', 0.88);
+              const comma = jpegUrl.indexOf(',');
+              if (comma === -1) {
+                resolve(null);
+                return;
+              }
+              const b64 = jpegUrl.slice(comma + 1);
+              if (!b64) {
+                resolve(null);
+                return;
+              }
+              resolve({
+                base64Data: b64,
+                mimeType: 'image/jpeg',
+                size: Math.round((b64.length * 3) / 4),
+              });
+            } catch {
+              resolve(null);
+            }
+          };
+          imgEl.onerror = () => resolve(null);
+          imgEl.src = dataUrl;
+        } catch {
+          resolve(null);
+        }
+      });
+    };
+
+    fileList.forEach((file) => {
       const resolvedMime = resolveAttachmentMimeType(file.name, file.type);
       const mime = isAudioAttachment(resolvedMime, file.name)
         ? normalizeAudioMimeType(resolvedMime)
@@ -3977,32 +4057,64 @@ export default function App() {
               size: file.size,
             },
           ]);
+          setPendingAttachmentReads((c) => Math.max(0, c - 1));
+        };
+        textReader.onerror = () => {
+          setPendingAttachmentReads((c) => Math.max(0, c - 1));
         };
         textReader.readAsText(file);
       } else {
         const reader = new FileReader();
-        reader.onload = () => {
-          const resultStr = String(reader.result || '');
-          const commaIdx = resultStr.indexOf(',');
-          if (commaIdx !== -1) {
-            const base64Data = resultStr.slice(commaIdx + 1);
-            setAttachedImages((prev) => [
-              ...(Array.isArray(prev) ? prev : []),
-              {
-                mimeType: mime,
-                data: base64Data,
-                name: file.name,
-                description: '',
-                size: file.size,
-              },
-            ]);
+        reader.onload = async () => {
+          try {
+            const resultStr = String(reader.result || '');
+            const commaIdx = resultStr.indexOf(',');
+            if (commaIdx !== -1) {
+              let base64Data = resultStr.slice(commaIdx + 1);
+              let finalMime =
+                !mime || mime === 'application/octet-stream'
+                  ? sniffMimeTypeFromBase64(base64Data, mime)
+                  : mime;
+              let finalSize = file.size;
+
+              if (
+                finalMime.startsWith('image/') &&
+                !isAudioAttachment(finalMime, file.name) &&
+                !isVideoAttachment(finalMime, file.name)
+              ) {
+                const optimized = await normalizeOversizedOrExoticRasterImage(
+                  resultStr,
+                  finalMime,
+                  file.size
+                );
+                if (optimized && optimized.base64Data) {
+                  base64Data = optimized.base64Data;
+                  finalMime = optimized.mimeType;
+                  finalSize = optimized.size;
+                }
+              }
+
+              setAttachedImages((prev) => [
+                ...(Array.isArray(prev) ? prev : []),
+                {
+                  mimeType: finalMime,
+                  data: base64Data,
+                  name: file.name,
+                  description: '',
+                  size: finalSize,
+                },
+              ]);
+            }
+          } finally {
+            setPendingAttachmentReads((c) => Math.max(0, c - 1));
           }
+        };
+        reader.onerror = () => {
+          setPendingAttachmentReads((c) => Math.max(0, c - 1));
         };
         reader.readAsDataURL(file);
       }
     });
-
-    e.target.value = '';
   };
 
   const handleHireStaffAgent = (newAgent: Omit<StaffAgent, 'id' | 'status'>) => {
@@ -4768,6 +4880,7 @@ export default function App() {
           .filter((m) => m && !m.isAmbientCameo && m.sender !== 'staff')
           .slice(-25)
           .map((m) => ({
+            id: m.id,
             role: m.role,
             text: stripToolReceiptsFromVisibleText(m.text),
             telemetryHeader: m.telemetryHeader,
@@ -5104,14 +5217,18 @@ export default function App() {
         (Array.isArray(prev) ? prev : [])
           .map((m) => {
             if (m.id === userMsg.id) {
-              const strippedImgs = Array.isArray(m.images)
+              const preservedImgs = Array.isArray(m.images)
                 ? m.images.map((im, idx) => {
                     const resolvedMime = resolveAttachmentMimeType(im.name || '', im.mimeType);
                     const storedMime = isAudioAttachment(resolvedMime, im.name)
                       ? normalizeAudioMimeType(resolvedMime)
                       : resolvedMime;
-                    if (im.data) {
-                      storeSessionImage(`${m.id}_${idx}`, im.data, storedMime);
+                    const cachedData = !im.data
+                      ? getSessionImage(`${m.id}_${idx}`)?.data || ''
+                      : '';
+                    const fullData = im.data || cachedData;
+                    if (fullData) {
+                      storeSessionImage(`${m.id}_${idx}`, fullData, storedMime);
                     }
                     const isPureImage =
                       storedMime.startsWith('image/') &&
@@ -5126,25 +5243,27 @@ export default function App() {
                         ? im.imageSummary ||
                           (im.description ? `[Description: ${im.description}]` : undefined)
                         : undefined,
-                      data: '', // Base64 data stripped for localStorage; full data is preserved in session cache / IndexedDB
+                      data: fullData, // Preserved in React state & IndexedDB; localStorage prunes automatically via stripHeavyAttachmentsForLocalStorage
                     };
                   })
                 : undefined;
-              if (m.voiceAudio?.data) {
+              const fullVoiceData =
+                m.voiceAudio?.data || getSessionImage(`${m.id}_voice`)?.data || '';
+              if (fullVoiceData && m.voiceAudio) {
                 storeSessionImage(
                   `${m.id}_voice`,
-                  m.voiceAudio.data,
+                  fullVoiceData,
                   normalizeAudioMimeType(m.voiceAudio.mimeType)
                 );
               }
-              const strippedVoice = m.voiceAudio
-                ? { ...m.voiceAudio, data: '' }
+              const preservedVoice = m.voiceAudio
+                ? { ...m.voiceAudio, data: fullVoiceData }
                 : undefined;
               return {
                 ...m,
                 tokenUsage: data.userMessageTokenUsage || m.tokenUsage,
-                images: strippedImgs,
-                voiceAudio: strippedVoice,
+                images: preservedImgs,
+                voiceAudio: preservedVoice,
               };
             }
             return m;
@@ -7598,10 +7717,16 @@ export default function App() {
                 </div>
               )}
 
+              {pendingAttachmentReads > 0 && (
+                <div className="mb-2 px-2.5 py-1.5 rounded-xl bg-[#180f13] border border-[#c59b47]/60 text-[11px] font-mono text-[#ffe5a3]">
+                  ⏳ Preparing attached media ({pendingAttachmentReads})…
+                </div>
+              )}
+
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="video/mp4,video/webm,video/quicktime,video/*,audio/*,image/*,application/pdf,text/*,.mp4,.webm,.mov,.mp3,.wav,.ogg,.m4a,.aac,.flac,.pdf,.txt,.md,.json,.csv,.py,.ts,.js,.html,.css"
+                accept="video/mp4,video/webm,video/quicktime,video/*,audio/*,image/*,application/pdf,text/*,.mp4,.webm,.mov,.mkv,.m4v,.mp3,.wav,.ogg,.m4a,.aac,.flac,.opus,.heic,.heif,.webp,.gif,.pdf,.txt,.md,.json,.csv,.py,.ts,.js,.html,.css"
                 multiple
                 onChange={handleImageUpload}
                 className="hidden"
@@ -7861,7 +7986,7 @@ export default function App() {
               <WorkbenchChatInput
                 ref={chatInputRef}
                 onSendMessage={handleSendMessage}
-                isSending={isSending}
+                isSending={isSending || pendingAttachmentReads > 0}
                 hasAttachedImages={attachedImages.length > 0}
                 onUserActivity={recordUserActivity}
               />
@@ -8783,22 +8908,33 @@ export default function App() {
             setIsVaultOpen(false);
             if (currentView === 'vault') navigateToView('chat');
           }}
-          onAttachItemToChat={(item) => {
-            const base64Data = String(item.dataUrl || '').split(',')[1] || '';
-            const resolvedMime = resolveAttachmentMimeType(item.filename || '', item.mimeType);
-            const cleanMime = isAudioAttachment(resolvedMime, item.filename)
+          onAttachItemToChat={async (item) => {
+            let sourceItem = item;
+            if (!sourceItem.dataUrl || !sourceItem.dataUrl.includes(',')) {
+              const reloaded = await readMediaVaultItem(sourceItem.id);
+              if (reloaded && reloaded.dataUrl) {
+                sourceItem = reloaded;
+              }
+            }
+            const base64Data = String(sourceItem.dataUrl || '').split(',')[1] || '';
+            const preMime = resolveAttachmentMimeType(sourceItem.filename || '', sourceItem.mimeType);
+            const resolvedMime =
+              (!preMime || preMime === 'application/octet-stream') && base64Data
+                ? sniffMimeTypeFromBase64(base64Data, preMime)
+                : preMime;
+            const cleanMime = isAudioAttachment(resolvedMime, sourceItem.filename)
               ? normalizeAudioMimeType(resolvedMime)
               : resolvedMime;
 
-            if (item.category === 'voice_clips' && item.origin === 'mic_recording') {
+            if (sourceItem.category === 'voice_clips' && sourceItem.origin === 'mic_recording') {
               setPendingVoiceDraft({
-                transcript: item.description || item.filename,
+                transcript: sourceItem.description || sourceItem.filename,
                 durationSec: 1,
                 voiceAudio: {
                   data: base64Data,
                   mimeType: cleanMime,
                   durationSec: 1,
-                  filename: item.filename,
+                  filename: sourceItem.filename,
                 },
               });
             } else {
@@ -8807,12 +8943,12 @@ export default function App() {
                 {
                   mimeType: cleanMime,
                   data: base64Data,
-                  name: item.filename,
-                  description: item.description,
-                  textContent: item.textContent,
-                  size: item.size,
+                  name: sourceItem.filename,
+                  description: sourceItem.description,
+                  textContent: sourceItem.textContent,
+                  size: sourceItem.size,
                   origin: 'vault',
-                  vaultId: item.id,
+                  vaultId: sourceItem.id,
                 },
               ]);
             }

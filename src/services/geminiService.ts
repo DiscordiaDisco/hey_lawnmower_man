@@ -131,6 +131,7 @@ export function normalizeInlineMediaMimeType(rawMime?: string | null): string {
     .trim()
     .toLowerCase();
   if (!cleaned) return '';
+  if (cleaned === 'image/jpg') return 'image/jpeg';
   if (
     cleaned === 'audio/m4a' ||
     cleaned === 'audio/x-m4a' ||
@@ -147,6 +148,53 @@ export function normalizeInlineMediaMimeType(rawMime?: string | null): string {
     return 'audio/wav';
   }
   return cleaned;
+}
+
+/**
+ * Sniffs common image, audio, video, and PDF MIME types from base64 magic bytes
+ * when an attachment arrives with an empty or generic application/octet-stream MIME type.
+ */
+export function sniffMimeTypeFromBase64(
+  base64Data?: string | null,
+  fallbackMime = ''
+): string {
+  const normalizedFallback = normalizeInlineMediaMimeType(fallbackMime);
+  const head = String(base64Data || '').trim().slice(0, 32);
+  if (head) {
+    if (head.startsWith('/9j/')) return 'image/jpeg';
+    if (head.startsWith('iVBORw0KGgo')) return 'image/png';
+    if (head.startsWith('R0lGOD')) return 'image/gif';
+    if (head.startsWith('JVBERi0')) return 'application/pdf';
+    if (head.startsWith('SUQz') || head.startsWith('//u') || head.startsWith('/+M')) {
+      return 'audio/mpeg';
+    }
+    if (head.startsWith('T2dnUw')) return 'audio/ogg';
+    if (head.startsWith('fLaC')) return 'audio/flac';
+    if (head.startsWith('UklGR')) {
+      try {
+        const padded = head.slice(0, 16);
+        const decoded =
+          typeof atob === 'function'
+            ? atob(padded)
+            : typeof Buffer !== 'undefined'
+            ? Buffer.from(padded, 'base64').toString('latin1')
+            : '';
+        if (decoded.slice(8, 12) === 'WEBP') return 'image/webp';
+        if (decoded.slice(8, 12) === 'WAVE') return 'audio/wav';
+      } catch {
+        if (head.includes('WEBP') || head.includes('V0VCUA') || head.includes('XRUJQ')) {
+          return 'image/webp';
+        }
+        if (head.includes('WAVE') || head.includes('V0FWR') || head.includes('XQVZF')) {
+          return 'audio/wav';
+        }
+      }
+    }
+    if (head.startsWith('GkXfo')) {
+      return normalizedFallback.startsWith('audio/') ? 'audio/webm' : 'video/webm';
+    }
+  }
+  return normalizedFallback || 'application/octet-stream';
 }
 
 /**
@@ -188,9 +236,13 @@ export function sanitizeGeminiContents(
     if (p.inlineData && typeof p.inlineData === 'object') {
       const idata = p.inlineData as { mimeType?: unknown; data?: unknown };
       const rawMime = typeof idata.mimeType === 'string' ? idata.mimeType : '';
-      const normMime = normalizeInlineMediaMimeType(rawMime) || 'application/octet-stream';
       const dataStr = typeof idata.data === 'string' ? idata.data : '';
       if (!dataStr) return null;
+      const preNormMime = normalizeInlineMediaMimeType(rawMime);
+      const normMime =
+        !preNormMime || preNormMime === 'application/octet-stream'
+          ? sniffMimeTypeFromBase64(dataStr, preNormMime)
+          : preNormMime;
       return {
         ...p,
         inlineData: {

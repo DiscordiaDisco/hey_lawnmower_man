@@ -3560,7 +3560,15 @@ test('Android Standalone PWA Manifest, Service Worker, Relative Base, and GitHub
     path.join(rootDir, '.github/workflows/deploy.yml'),
     'utf-8'
   );
+  assert.equal(
+    deployWorkflow.includes('cache: npm'),
+    false,
+    'deploy.yml must NOT use cache: npm because repo uses bun.lock (no package-lock.json)'
+  );
+  assert.ok(deployWorkflow.includes('oven-sh/setup-bun'));
+  assert.ok(deployWorkflow.includes('bun install'));
   assert.ok(deployWorkflow.includes('npm run build'));
+  assert.ok(deployWorkflow.includes('actions/configure-pages'));
   assert.ok(deployWorkflow.includes('actions/upload-pages-artifact'));
   assert.ok(deployWorkflow.includes('actions/deploy-pages'));
 });
@@ -3798,5 +3806,165 @@ test('Tidal Lock.m4a regression: audio/m4a normalizes to audio/mp4, skips visual
   assert.equal(extractedCalls[0].name, 'react_to_message');
   assert.equal(extractedCalls[0].args.emoji, '🎵');
 });
+
+test('Chat media preservation: multi-round tool loop retains current-turn inlineData, recent history rehydrates session media, and Android/octet-stream MIME sniffs cleanly', async () => {
+  const {
+    runClientChatTurn,
+    storeSessionImage,
+    SEED_ARGON_BOOK,
+    SEED_HEX_BOOK,
+    SEED_LOREBOOK_DRAWERS,
+    DEFAULT_STAFF_AGENTS,
+    resolveAttachmentMimeType,
+    sniffMimeTypeFromBase64,
+  } = await import('./workbenchLogic.js');
+  const {
+    normalizeInlineMediaMimeType,
+    sanitizeGeminiContents,
+  } = await import('../services/geminiService.js');
+
+  // 1. Magic-byte sniffing & image/jpg + .heic resolution for Android uploads
+  assert.equal(normalizeInlineMediaMimeType('image/jpg'), 'image/jpeg');
+  assert.equal(resolveAttachmentMimeType('photo.jpg', 'image/jpg'), 'image/jpeg');
+  assert.equal(resolveAttachmentMimeType('shot.heic', ''), 'image/heic');
+  assert.equal(sniffMimeTypeFromBase64('/9j/4AAQSkZJRgABAQAAAQABAAD', 'application/octet-stream'), 'image/jpeg');
+  assert.equal(sniffMimeTypeFromBase64('iVBORw0KGgoAAAANSUhEUgAA', ''), 'image/png');
+  assert.equal(
+    sniffMimeTypeFromBase64(Buffer.from('RIFF\x00\x00\x00\x00WEBPVP8 ').toString('base64'), 'application/octet-stream'),
+    'image/webp'
+  );
+  assert.equal(sniffMimeTypeFromBase64('JVBERi0xLjQK', 'application/octet-stream'), 'application/pdf');
+
+  const sanitizedUnknown = sanitizeGeminiContents([
+    {
+      role: 'user',
+      parts: [
+        { inlineData: { mimeType: 'application/octet-stream', data: '/9j/4AAQSkZJRgABAQAAAQABAAD' } },
+        { inlineData: { mimeType: 'image/jpg', data: '/9j/4AAQSkZJRgABAQAAAQABAAD' } },
+      ],
+    },
+  ]);
+  assert.equal(sanitizedUnknown[0].parts?.[0]?.inlineData?.mimeType, 'image/jpeg');
+  assert.equal(sanitizedUnknown[0].parts?.[1]?.inlineData?.mimeType, 'image/jpeg');
+
+  // 2. Recent history session image rehydration + current-turn media survival across Round 1 -> Round 2 tool calls
+  storeSessionImage('user-prev-1_0', 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY=', 'image/png');
+
+  const origFetch = globalThis.fetch;
+  const geminiRequests: Array<{ contents: any[] }> = [];
+  let gemCallCount = 0;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    if (urlStr.includes('generativelanguage.googleapis.com')) {
+      gemCallCount++;
+      const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+      geminiRequests.push({ contents: Array.isArray(parsedBody.contents) ? parsedBody.contents : [] });
+
+      if (gemCallCount === 1) {
+        // Round 1: Argon emits a tool call BEFORE writing his final response about Hex's photo
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  role: 'model',
+                  parts: [
+                    {
+                      functionCall: {
+                        id: 'fc-react-1',
+                        name: 'react_to_message',
+                        args: { emoji: '🖤' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      // Round 2: Final response after tool execution
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: 'model',
+                parts: [{ text: '*I inspect the photo you just sent.* "Got both images loud and clear, Hex."' }],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const turnResult = await runClientChatTurn({
+      model: 'gemini-4-argon',
+      customApiKey: 'AIzaTestFakeKey123456',
+      systemPrompt: 'You are Argon.',
+      history: [
+        {
+          id: 'user-prev-1',
+          role: 'user',
+          text: 'Earlier screenshot',
+          images: [{ mimeType: 'image/png', data: '', name: 'prev_shot.png' }],
+        },
+        {
+          id: 'argon-prev-1',
+          role: 'model',
+          text: '*I glance at the screenshot.*',
+        },
+      ],
+      userMessageText: 'And look at this new photo too',
+      images: [
+        {
+          mimeType: 'application/octet-stream',
+          data: '/9j/4AAQSkZJRgABAQAAAQABAAD',
+          name: '100004821',
+        },
+      ],
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonAvatarMode: 'default',
+      hexAvatarDesc: 'Hex avatar',
+      staffAgents: DEFAULT_STAFF_AGENTS,
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+    });
+
+    assert.ok(turnResult.text.includes('Got both images loud and clear'));
+    assert.equal(geminiRequests.length, 2, 'Should make Round 1 (tool call) and Round 2 (reply) Gemini requests');
+
+    // Verify Round 1 received BOTH rehydrated recent-history image AND sniffed current-turn JPEG inlineData
+    const round1Contents = geminiRequests[0].contents;
+    const round1HistTurn = round1Contents[0];
+    const round1CurrentTurn = round1Contents[2];
+    assert.ok(
+      round1HistTurn.parts.some((p: any) => p.inlineData?.mimeType === 'image/png' && p.inlineData?.data === 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY='),
+      'Round 1 must rehydrate recent historical image from session cache when data was stripped'
+    );
+    assert.ok(
+      round1CurrentTurn.parts.some((p: any) => p.inlineData?.mimeType === 'image/jpeg' && p.inlineData?.data === '/9j/4AAQSkZJRgABAQAAAQABAAD'),
+      'Round 1 must sniff application/octet-stream JPEG magic bytes and pass inlineData'
+    );
+
+    // Verify Round 2 STILL has Hex's current-turn JPEG inlineData intact (NEVER stripped after Round 1 tool call!)
+    const round2Contents = geminiRequests[1].contents;
+    const round2CurrentTurn = round2Contents[2];
+    assert.ok(
+      round2CurrentTurn.parts.some((p: any) => p.inlineData?.mimeType === 'image/jpeg' && p.inlineData?.data === '/9j/4AAQSkZJRgABAQAAAQABAAD'),
+      'Round 2 MUST preserve Hex current-turn inlineData across tool-call rounds'
+    );
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 
 

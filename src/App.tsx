@@ -208,6 +208,10 @@ import {
   decodeGithubBase64Utf8,
   encodeGithubUtf8Base64,
   SanctuaryLiveSyncPayload,
+  loadRpModeEnabled,
+  saveRpModeEnabled,
+  loadRpInjectionSnippet,
+  saveRpInjectionSnippet,
 } from './utils/workbenchLogic';
 import { TicketScratchpadModal } from './components/TicketScratchpadModal';
 import { CodeCopyBlock } from './components/CodeCopyBlock';
@@ -237,7 +241,7 @@ import {
   executeGithubApi,
   GithubApiExecutionResult,
 } from './services/gemini';
-import { Dog, CloudLightning, RotateCcw, RefreshCw, AlertTriangle, X } from 'lucide-react';
+import { Dog, CloudLightning, RotateCcw, RefreshCw, AlertTriangle, X, Flame } from 'lucide-react';
 import { PWAInstallButton, OfflineIndicator } from './components/PWAInstallButton';
 
 /**
@@ -1989,6 +1993,20 @@ export default function App() {
     reason: string;
     attempts: number;
   } | null>(null);
+  const [rpModeEnabled, setRpModeEnabled] = useState<boolean>(() => loadRpModeEnabled());
+  const [rpInjectionSnippet, setRpInjectionSnippet] = useState<string>(() =>
+    loadRpInjectionSnippet()
+  );
+  const handleToggleRpMode = (nextVal?: boolean) => {
+    setRpModeEnabled((prev) => {
+      const target = typeof nextVal === 'boolean' ? nextVal : !prev;
+      return saveRpModeEnabled(target);
+    });
+  };
+  const handleChangeRpInjectionSnippet = (nextSnippet: string) => {
+    setRpInjectionSnippet(nextSnippet);
+    saveRpInjectionSnippet(nextSnippet);
+  };
   const [shockFlash, setShockFlash] = useState<boolean>(false);
   const [isScrolledUp, setIsScrolledUp] = useState<boolean>(false);
 
@@ -2448,6 +2466,8 @@ export default function App() {
         autoSpeakArgon,
         heartbeatConfig,
         toolPermissionMatrix,
+        rpModeEnabled,
+        rpInjectionSnippet,
       },
     });
 
@@ -2568,6 +2588,12 @@ export default function App() {
       if (s.toolPermissionMatrix) {
         setToolPermissionMatrix(s.toolPermissionMatrix);
         saveToolPermissionMatrix(s.toolPermissionMatrix);
+      }
+      if (typeof s.rpModeEnabled === 'boolean') {
+        handleToggleRpMode(s.rpModeEnabled);
+      }
+      if (typeof s.rpInjectionSnippet === 'string' && s.rpInjectionSnippet.trim()) {
+        handleChangeRpInjectionSnippet(s.rpInjectionSnippet);
       }
     }
 
@@ -5332,6 +5358,8 @@ export default function App() {
         hexBook,
         customApiKey,
         userTimeZone,
+        rpModeEnabled,
+        rpInjectionSnippet,
         abortSignal: abortCtrl.signal,
         onRetryStatus: (status) => {
           setRetryWaitStatus(status);
@@ -6164,6 +6192,7 @@ export default function App() {
           argonBook,
           hexBook,
           customApiKey,
+          rpModeEnabled: false,
         });
 
         if (data.updatedLorebook && typeof data.updatedLorebook === 'object') {
@@ -8363,8 +8392,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Compact Media Toolbar Row directly above the full-width Message Argon input */}
-              <div className="grid grid-cols-5 gap-1.5 mb-1.5">
+              {/* Compact Media & Mode Toolbar Row directly above the full-width Message Argon input */}
+              <div className="grid grid-cols-6 gap-1 mb-1.5">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -8455,6 +8484,36 @@ export default function App() {
                   </span>
                   <span className="text-[10px] font-serif-webtoon leading-none">
                     Stickers
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="chat-rp-mode-toggle"
+                  aria-pressed={rpModeEnabled}
+                  onClick={() => handleToggleRpMode()}
+                  title={
+                    rpModeEnabled
+                      ? 'RP / Intimate Mode ON — Ephemeral creative clearance injected into systemInstruction only. Tap to flip OFF with zero residue.'
+                      : 'RP / Intimate Mode OFF — Clean baseline mode. Tap to enable ephemeral RP clearance on next turn.'
+                  }
+                  className={`min-h-[44px] h-11 px-1 rounded-lg flex flex-col items-center justify-center gap-0.5 cursor-pointer active:scale-95 transition-all border ${
+                    rpModeEnabled
+                      ? 'bg-[rgba(230,168,181,0.18)] border-[#D4AF37] text-[#ffe5a3] shadow-[0_0_12px_rgba(212,175,55,0.35)]'
+                      : 'bg-[#161215]/90 border-[#E6A8B5]/35 text-[#E6A8B5]/80 hover:border-[#D4AF37]/60'
+                  }`}
+                >
+                  <Flame
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      rpModeEnabled ? 'text-[#D4AF37]' : 'text-[#E6A8B5]/70'
+                    }`}
+                  />
+                  <span
+                    className={`text-[10px] font-mono leading-none ${
+                      rpModeEnabled ? 'font-bold text-[#ffe5a3]' : 'text-[#E6A8B5]/85'
+                    }`}
+                  >
+                    {rpModeEnabled ? 'RP On' : 'RP Off'}
                   </span>
                 </button>
               </div>
@@ -8692,6 +8751,10 @@ export default function App() {
         onChangeThinkingBudget={handleChangeThinkingBudget}
         thinkingLevel={thinkingLevel}
         onChangeThinkingLevel={handleChangeThinkingLevel}
+        rpModeEnabled={rpModeEnabled}
+        onToggleRpMode={handleToggleRpMode}
+        rpInjectionSnippet={rpInjectionSnippet}
+        onChangeRpInjectionSnippet={handleChangeRpInjectionSnippet}
       />
 
       {/* Full-Screen Chibi Sticker Studio Modal (HTML5 Canvas Slicer, Nudge Sliders, & Argon Multimodal Vision Auto-Labeler) */}
@@ -8779,6 +8842,10 @@ export default function App() {
         lorebook={lorebook}
         argonBook={argonBook}
         hexBook={hexBook}
+        rpModeEnabled={rpModeEnabled}
+        onToggleRpMode={handleToggleRpMode}
+        rpInjectionSnippet={rpInjectionSnippet}
+        onChangeRpInjectionSnippet={handleChangeRpInjectionSnippet}
       />
 
       {/* Full-Screen Staff Quarters Window (with Haiku, A Monkey, Permission Matrix, Edit Agent & Hire Staff Popup) */}

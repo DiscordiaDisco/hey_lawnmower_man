@@ -4601,7 +4601,211 @@ test('Auto-retry & no fake fallback stubs: inspectGeminiResponseBlockOrEmpty, bu
   }
 });
 
+test('Live RP On/Off Toggle: ephemeral systemInstruction injection, zero-residue stripping on Turn N+1 without reset, and Sanctuary sync persistence', async () => {
+  const {
+    STORAGE_KEYS,
+    DEFAULT_RP_INJECTION_SNIPPET,
+    loadRpModeEnabled,
+    saveRpModeEnabled,
+    loadRpInjectionSnippet,
+    saveRpInjectionSnippet,
+    resolveEphemeralRpSystemBlock,
+    stripEphemeralRpPromptResidue,
+    buildLiveTurnSystemContextBlock,
+    runClientChatTurn,
+    compileSanctuaryLiveSyncPayload,
+    SEED_ARGON_BOOK,
+    SEED_HEX_BOOK,
+    SEED_LOREBOOK_DRAWERS,
+    DEFAULT_STAFF_AGENTS,
+  } = await import('./workbenchLogic.js');
 
+  const mockStore = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = {
+    getItem: (k: string) => mockStore.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      mockStore.set(k, v);
+    },
+    removeItem: (k: string) => {
+      mockStore.delete(k);
+    },
+  };
 
+  const origFetch = globalThis.fetch;
+  const capturedPayloads: Array<{ systemInstructionText: string; contentsJson: string }> = [];
 
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    if (urlStr.includes('generativelanguage.googleapis.com')) {
+      const bodyObj = init?.body ? JSON.parse(String(init.body)) : {};
+      const sysParts = bodyObj?.systemInstruction?.parts;
+      const sysText = Array.isArray(sysParts)
+        ? sysParts.map((p: { text?: string }) => p?.text || '').join('\n')
+        : String(bodyObj?.systemInstruction || '');
+      capturedPayloads.push({
+        systemInstructionText: sysText,
+        contentsJson: JSON.stringify(bodyObj?.contents || []),
+      });
+      const turnNum = capturedPayloads.length;
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                role: 'model',
+                parts: [
+                  {
+                    text:
+                      turnNum === 1
+                        ? '*I brush a strand of hair behind your ear.* "RP mode turn one, Hex."'
+                        : '*I lean back in the leather armchair.* "Clean turn two, zero residue."',
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
 
+  try {
+    // 1. Default state is OFF (Argon is not primed 24/7)
+    saveRpModeEnabled(false);
+    assert.equal(loadRpModeEnabled(), false);
+
+    // 2. Toggle ON/OFF persistence
+    saveRpModeEnabled(true);
+    assert.equal(loadRpModeEnabled(), true);
+    assert.equal(mockStore.get(STORAGE_KEYS.RP_MODE_ENABLED), 'true');
+    saveRpModeEnabled(false);
+    assert.equal(loadRpModeEnabled(), false);
+    assert.equal(mockStore.get(STORAGE_KEYS.RP_MODE_ENABLED), 'false');
+
+    // 3. Snippet customization & reset
+    const customSnippet = 'CUSTOM_RP_DIRECTIVE_SOMATIC_99: Authorized consensual adult romance only when active.';
+    saveRpInjectionSnippet(customSnippet);
+    assert.equal(loadRpInjectionSnippet(), customSnippet);
+    assert.equal(mockStore.get(STORAGE_KEYS.RP_INJECTION_SNIPPET), customSnippet);
+
+    // 4. resolveEphemeralRpSystemBlock & buildLiveTurnSystemContextBlock
+    assert.equal(resolveEphemeralRpSystemBlock({ enabled: false, snippet: customSnippet }), '');
+    const enabledBlock = resolveEphemeralRpSystemBlock({ enabled: true, snippet: customSnippet });
+    assert.ok(enabledBlock.includes('<ephemeral_rp_clearance>'));
+    assert.ok(enabledBlock.includes(customSnippet));
+    assert.ok(enabledBlock.includes('</ephemeral_rp_clearance>'));
+
+    const liveCtxOn = buildLiveTurnSystemContextBlock({
+      rpModeEnabled: true,
+      rpInjectionSnippet: customSnippet,
+    });
+    assert.ok(liveCtxOn.includes('<ephemeral_rp_clearance>'));
+    assert.ok(liveCtxOn.includes(customSnippet));
+
+    const liveCtxOff = buildLiveTurnSystemContextBlock({
+      rpModeEnabled: false,
+      rpInjectionSnippet: customSnippet,
+    });
+    assert.equal(liveCtxOff.includes('<ephemeral_rp_clearance>'), false);
+    assert.equal(liveCtxOff.includes(customSnippet), false);
+    assert.equal(liveCtxOff.includes('EPHEMERAL SESSION CLEARANCE'), false);
+
+    // 5. Residue scrubber cleans any leaked tags or snippet text
+    const dirty = `Hello ${enabledBlock} world ${customSnippet}`;
+    const scrubbed = stripEphemeralRpPromptResidue(dirty, customSnippet);
+    assert.equal(scrubbed.includes('<ephemeral_rp_clearance>'), false);
+    assert.equal(scrubbed.includes(customSnippet), false);
+    assert.ok(scrubbed.includes('Hello'));
+    assert.ok(scrubbed.includes('world'));
+
+    // 6. Multi-turn chat WITHOUT resetting history: Turn 1 (RP ON) -> Turn 2 (RP OFF)
+    saveRpModeEnabled(true);
+    const turn1 = await runClientChatTurn({
+      model: 'gemini-4-argon',
+      customApiKey: 'AIzaTestFakeKey123456',
+      systemPrompt: 'You are Argon.',
+      history: [],
+      userMessageText: 'Stay close tonight.',
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonAvatarMode: 'default',
+      hexAvatarDesc: 'Hex avatar',
+      staffAgents: DEFAULT_STAFF_AGENTS,
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+      rpModeEnabled: true,
+      rpInjectionSnippet: customSnippet,
+    });
+
+    assert.equal(capturedPayloads.length, 1);
+    assert.ok(
+      capturedPayloads[0].systemInstructionText.includes(`<ephemeral_rp_clearance>\n${customSnippet}\n</ephemeral_rp_clearance>`),
+      'Turn 1 (RP ON) must inject ephemeral RP directive into systemInstruction'
+    );
+    assert.equal(
+      capturedPayloads[0].contentsJson.includes(customSnippet),
+      false,
+      'Turn 1 must NEVER inject RP directive into chat contents'
+    );
+    assert.equal(
+      capturedPayloads[0].contentsJson.includes('ephemeral_rp_clearance'),
+      false,
+      'Turn 1 must NEVER leak ephemeral tags into chat contents'
+    );
+
+    // Flip RP OFF and send Turn 2 reusing Turn 1 history with ZERO chat reset
+    saveRpModeEnabled(false);
+    await runClientChatTurn({
+      model: 'gemini-4-argon',
+      customApiKey: 'AIzaTestFakeKey123456',
+      systemPrompt: 'You are Argon.',
+      history: [
+        { role: 'user', text: 'Stay close tonight.' },
+        { role: 'model', text: turn1.text },
+      ],
+      userMessageText: 'Now help me debug a quick TypeScript bug.',
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonAvatarMode: 'default',
+      hexAvatarDesc: 'Hex avatar',
+      staffAgents: DEFAULT_STAFF_AGENTS,
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+      rpModeEnabled: false,
+      rpInjectionSnippet: customSnippet,
+    });
+
+    assert.equal(capturedPayloads.length, 2);
+    assert.equal(
+      capturedPayloads[1].systemInstructionText.includes('ephemeral_rp_clearance'),
+      false,
+      'Turn 2 (RP OFF) must completely strip <ephemeral_rp_clearance> from systemInstruction on the very next turn'
+    );
+    assert.equal(
+      capturedPayloads[1].systemInstructionText.includes(customSnippet),
+      false,
+      'Turn 2 (RP OFF) must have zero RP snippet text in systemInstruction'
+    );
+    assert.equal(
+      capturedPayloads[1].contentsJson.includes(customSnippet),
+      false,
+      'Turn 2 must have zero RP residue in conversation history contents'
+    );
+
+    // 7. Sanctuary live sync payload includes rpModeEnabled & rpInjectionSnippet
+    saveRpModeEnabled(true);
+    const syncPayload = compileSanctuaryLiveSyncPayload();
+    assert.equal(syncPayload.appSettings?.rpModeEnabled, true);
+    assert.equal(syncPayload.appSettings?.rpInjectionSnippet, customSnippet);
+
+    // Restore default snippet
+    saveRpInjectionSnippet(DEFAULT_RP_INJECTION_SNIPPET);
+    saveRpModeEnabled(false);
+    assert.equal(loadRpInjectionSnippet(), DEFAULT_RP_INJECTION_SNIPPET);
+    assert.equal(loadRpModeEnabled(), false);
+  } finally {
+    globalThis.fetch = origFetch;
+    delete (globalThis as Record<string, unknown>).localStorage;
+  }
+});

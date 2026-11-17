@@ -43,6 +43,11 @@ import {
   loadUserPersona,
   saveUserPersona,
   LinkedSyncFileMeta,
+  DEFAULT_RP_INJECTION_SNIPPET,
+  loadRpModeEnabled,
+  saveRpModeEnabled,
+  loadRpInjectionSnippet,
+  saveRpInjectionSnippet,
 } from '../utils/workbenchLogic';
 import { ApothecaryIcon } from './ApothecaryIcon';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -61,6 +66,8 @@ import {
   X,
   Clock,
   FileJson,
+  Flame,
+  RotateCcw,
 } from 'lucide-react';
 
 interface SystemSyncModalProps {
@@ -130,6 +137,10 @@ interface SystemSyncModalProps {
   onChangeThinkingBudget?: (val: number) => void;
   thinkingLevel?: ThinkingLevel;
   onChangeThinkingLevel?: (val: ThinkingLevel) => void;
+  rpModeEnabled?: boolean;
+  onToggleRpMode?: (enabled: boolean) => void;
+  rpInjectionSnippet?: string;
+  onChangeRpInjectionSnippet?: (snippet: string) => void;
 }
 
 export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
@@ -197,8 +208,19 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
   onChangeThinkingBudget,
   thinkingLevel: propThinkingLevel,
   onChangeThinkingLevel,
+  rpModeEnabled: propRpModeEnabled,
+  onToggleRpMode,
+  rpInjectionSnippet: propRpInjectionSnippet,
+  onChangeRpInjectionSnippet,
 }) => {
   const [settingsTab, setSettingsTab] = useState<'engine' | 'user'>('engine');
+  const [localRpEnabled, setLocalRpEnabled] = useState<boolean>(() =>
+    propRpModeEnabled !== undefined ? propRpModeEnabled : loadRpModeEnabled()
+  );
+  const [localRpSnippet, setLocalRpSnippet] = useState<string>(() =>
+    propRpInjectionSnippet !== undefined ? propRpInjectionSnippet : loadRpInjectionSnippet()
+  );
+  const [rpResetNotice, setRpResetNotice] = useState<boolean>(false);
   const phoneFileInputRef = useRef<HTMLInputElement | null>(null);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() => {
     if (propThinkingLevel) return propThinkingLevel;
@@ -221,6 +243,44 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
       setThinkingBudget(propThinkingBudget);
     }
   }, [propThinkingBudget]);
+
+  useEffect(() => {
+    if (typeof propRpModeEnabled === 'boolean') {
+      setLocalRpEnabled(propRpModeEnabled);
+    }
+  }, [propRpModeEnabled]);
+
+  useEffect(() => {
+    if (typeof propRpInjectionSnippet === 'string') {
+      setLocalRpSnippet(propRpInjectionSnippet);
+    }
+  }, [propRpInjectionSnippet]);
+
+  const effectiveRpEnabled =
+    propRpModeEnabled !== undefined ? propRpModeEnabled : localRpEnabled;
+  const effectiveRpSnippet =
+    propRpInjectionSnippet !== undefined ? propRpInjectionSnippet : localRpSnippet;
+
+  const handleToggleRpInSettings = () => {
+    const next = !effectiveRpEnabled;
+    setLocalRpEnabled(next);
+    saveRpModeEnabled(next);
+    onToggleRpMode?.(next);
+  };
+
+  const handleChangeRpSnippetInSettings = (val: string) => {
+    setLocalRpSnippet(val);
+    saveRpInjectionSnippet(val);
+    onChangeRpInjectionSnippet?.(val);
+  };
+
+  const handleResetRpSnippetInSettings = () => {
+    setLocalRpSnippet(DEFAULT_RP_INJECTION_SNIPPET);
+    saveRpInjectionSnippet(DEFAULT_RP_INJECTION_SNIPPET);
+    onChangeRpInjectionSnippet?.(DEFAULT_RP_INJECTION_SNIPPET);
+    setRpResetNotice(true);
+    window.setTimeout(() => setRpResetNotice(false), 2000);
+  };
   const [cityQuery, setCityQuery] = useState('');
   const [localVocalStylePrompt, setLocalVocalStylePrompt] = useState<string>(() =>
     argonVocalStylePrompt || loadArgonVocalStylePrompt()
@@ -827,6 +887,77 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
                     <div className="text-[9px] opacity-70 font-mono mt-0.5">{preset.desc}</div>
                   </button>
                 ))}
+              </div>
+            </section>
+
+            {/* Ephemeral RP / Intimate Mode Injection Section */}
+            <section
+              data-testid="settings-rp-injection-section"
+              className="w-full min-w-0 max-w-full overflow-hidden break-words box-border p-3.5 sm:p-4 rounded-xl bg-[rgba(230,168,181,0.08)] space-y-3 border border-[#D4AF37]/70"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <h3 className="text-sm sm:text-base font-bold text-[#f6e6eb] flex items-center gap-2">
+                    <Flame className="w-4 h-4 text-[#D4AF37] shrink-0" />
+                    <span>RP / Intimate Mode (Ephemeral Injection)</span>
+                  </h3>
+                  <p className="text-xs text-[#E6A8B5]/85 font-mono leading-relaxed mt-0.5">
+                    When toggled <strong>RP On</strong>, injects this creative-writing clearance into the active turn&apos;s ephemeral <code className="text-[#D4AF37]">systemInstruction</code>. Flipping <strong>RP Off</strong> strips it on the very next turn with zero chat history residue.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    data-testid="settings-rp-mode-toggle"
+                    aria-pressed={effectiveRpEnabled}
+                    onClick={handleToggleRpInSettings}
+                    className={`min-h-[44px] px-3.5 py-2 rounded-xl border text-xs font-mono font-bold cursor-pointer inline-flex items-center gap-1.5 transition-all ${
+                      effectiveRpEnabled
+                        ? 'bg-[rgba(230,168,181,0.2)] border-[#D4AF37] text-[#ffe5a3]'
+                        : 'bg-[#161215]/90 border-[#E6A8B5]/40 text-[#E6A8B5]/80'
+                    }`}
+                  >
+                    <Flame
+                      className={`w-3.5 h-3.5 ${
+                        effectiveRpEnabled ? 'text-[#D4AF37]' : 'opacity-60'
+                      }`}
+                    />
+                    <span>{effectiveRpEnabled ? 'RP On' : 'RP Off'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="settings-rp-snippet-reset"
+                    onClick={handleResetRpSnippetInSettings}
+                    className="min-h-[44px] px-3 py-2 rounded-xl bg-[#161215]/80 hover:bg-[#231b20] border border-[#E6A8B5]/40 text-[#E6A8B5] text-xs font-mono cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+
+              {rpResetNotice && (
+                <div className="text-xs font-mono text-emerald-300">
+                  Restored default RP injection snippet.
+                </div>
+              )}
+
+              <div>
+                <label
+                  htmlFor="settings-rp-injection-snippet-textarea"
+                  className="block text-[11px] font-mono text-[#E6A8B5] mb-1"
+                >
+                  Editable Ephemeral RP Clearance Directive:
+                </label>
+                <textarea
+                  id="settings-rp-injection-snippet-textarea"
+                  data-testid="settings-rp-injection-snippet-textarea"
+                  rows={4}
+                  value={effectiveRpSnippet}
+                  onChange={(e) => handleChangeRpSnippetInSettings(e.target.value)}
+                  className="w-full p-2.5 rounded-xl bg-[#161215] border border-[#E6A8B5]/40 focus:border-[#D4AF37] font-mono text-xs text-[#f6e6eb] leading-relaxed outline-none"
+                />
               </div>
             </section>
 

@@ -4363,6 +4363,245 @@ test('Private Repository Routing: append_guy_diary & Sanctuary Vault target Disc
   }
 });
 
+test('Auto-retry & no fake fallback stubs: inspectGeminiResponseBlockOrEmpty, buildRetryAdjustedBrainConfig, abortable wait timer, and runClientChatTurn recovery', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const {
+    inspectGeminiResponseBlockOrEmpty,
+    buildRetryAdjustedBrainConfig,
+    waitWithAbortSignal,
+    sanitizeGeminiConfig,
+    runClientChatTurn,
+    SEED_ARGON_BOOK,
+    SEED_HEX_BOOK,
+    SEED_LOREBOOK_DRAWERS,
+    DEFAULT_STAFF_AGENTS,
+  } = await import('./workbenchLogic.js');
+
+  // 1. Verify hardcoded fake fallback stubs are completely removed from App.tsx and workbenchLogic.ts
+  const appSource = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+  const logicSource = fs.readFileSync(path.resolve(process.cwd(), 'src/utils/workbenchLogic.ts'), 'utf-8');
+  assert.equal(
+    appSource.includes('Finished checking all the records and drawers') ||
+      logicSource.includes('Finished checking all the records and drawers'),
+    false,
+    'Hardcoded fake tool-completion stub must be completely removed'
+  );
+  assert.equal(
+    appSource.includes(`"I'm right here with you, Hex."`),
+    false,
+    'Hardcoded fake empty-reply stub must be completely removed from App.tsx'
+  );
+
+  // 2. Response inspection across blocked, thought-only, empty candidate, and valid responses
+  assert.deepEqual(
+    inspectGeminiResponseBlockOrEmpty({
+      candidates: [{ finishReason: 'SAFETY', content: { role: 'model', parts: [] } }],
+    }),
+    {
+      isEmptyOrBlocked: true,
+      reason: 'SAFETY',
+      finishReason: 'SAFETY',
+      blockReason: undefined,
+      hasText: false,
+      hasFunctionCalls: false,
+      thoughtOnly: false,
+    }
+  );
+  assert.equal(
+    inspectGeminiResponseBlockOrEmpty({
+      promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+      candidates: [],
+    }).reason,
+    'PROHIBITED_CONTENT'
+  );
+  assert.equal(
+    inspectGeminiResponseBlockOrEmpty({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { role: 'model', parts: [{ thought: true, text: 'Internal reasoning only' }] },
+        },
+      ],
+    }).reason,
+    'THOUGHT_ONLY_EMPTY'
+  );
+  assert.equal(
+    inspectGeminiResponseBlockOrEmpty({
+      candidates: [
+        {
+          finishReason: 'STOP',
+          content: { role: 'model', parts: [{ text: '*I look up at you.* "Right here."' }] },
+        },
+      ],
+    }).isEmptyOrBlocked,
+    false
+  );
+
+  // 3. Config builder applies BLOCK_NONE safety, adjusts temperature on non-3/4 models, and steps down HIGH thinking on Gemini 4
+  const gemini4Adj = buildRetryAdjustedBrainConfig({
+    baseConfig: { systemInstruction: 'Base system' },
+    model: 'gemini-4-argon',
+    retryAttempt: 1,
+    thinkingLevel: 'HIGH',
+    blockInfo: {
+      isEmptyOrBlocked: true,
+      reason: 'SAFETY',
+      finishReason: 'SAFETY',
+      hasText: false,
+      hasFunctionCalls: false,
+      thoughtOnly: false,
+    },
+  });
+  assert.ok(Array.isArray(gemini4Adj.config.safetySettings) && gemini4Adj.config.safetySettings.length === 5);
+  assert.equal(gemini4Adj.thinkingLevel, 'MEDIUM');
+  assert.ok(String(gemini4Adj.config.systemInstruction).includes('RETRY DIRECTIVE #1'));
+  const sanitizedG4 = sanitizeGeminiConfig(gemini4Adj.config, 'gemini-4-argon');
+  assert.equal('temperature' in sanitizedG4, false, 'Gemini 4 sanitized config must keep temperature omitted');
+
+  const gemini25Adj = buildRetryAdjustedBrainConfig({
+    baseConfig: { systemInstruction: 'Base', temperature: 0.9 },
+    model: 'gemini-2.5-pro',
+    retryAttempt: 1,
+    thinkingLevel: 'LOW',
+    blockInfo: {
+      isEmptyOrBlocked: true,
+      reason: 'EMPTY_RESPONSE',
+      hasText: false,
+      hasFunctionCalls: false,
+      thoughtOnly: false,
+    },
+  });
+  assert.notEqual(gemini25Adj.config.temperature, 0.9, 'Non-Gemini-3/4 retry should adjust temperature');
+
+  // 4. waitWithAbortSignal aborts cleanly
+  const abortCtrl = new AbortController();
+  const waitPromise = waitWithAbortSignal(5000, abortCtrl.signal);
+  abortCtrl.abort();
+  await assert.rejects(waitPromise, /Turn interrupted by user/);
+
+  // 5. End-to-end auto-retry recovery on Attempt 1 SAFETY block -> Attempt 2 succeeds
+  const origFetch = globalThis.fetch;
+  let fetchCount = 0;
+  const capturedBodies: Array<Record<string, any>> = [];
+  const retryEvents: Array<{ attempt: number; reason: string; waitMs: number } | null> = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = String(input);
+    if (urlStr.includes('generativelanguage.googleapis.com')) {
+      fetchCount += 1;
+      const bodyObj = init?.body ? JSON.parse(String(init.body)) : {};
+      capturedBodies.push(bodyObj);
+
+      if (fetchCount === 1) {
+        return new Response(
+          JSON.stringify({
+            candidates: [{ finishReason: 'SAFETY', content: { role: 'model', parts: [] } }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (fetchCount === 2) {
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                finishReason: 'STOP',
+                content: {
+                  role: 'model',
+                  parts: [{ text: '*I reach across the desk for your hand.* "Recovered cleanly on retry, Hex."' }],
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      // Subsequent calls (exhaustion test below): always blocked
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: fetchCount === 3 ? 'STOP' : 'SAFETY',
+              content: {
+                role: 'model',
+                parts:
+                  fetchCount === 3
+                    ? [
+                        {
+                          functionCall: {
+                            id: 'fc-react-test',
+                            name: 'react_to_message',
+                            args: { emoji: '🖤' },
+                          },
+                        },
+                      ]
+                    : [],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const recoveredTurn = await runClientChatTurn({
+      model: 'gemini-4-argon',
+      customApiKey: 'AIzaTestFakeKey123456',
+      systemPrompt: 'You are Argon.',
+      history: [],
+      userMessageText: 'Stay with me tonight.',
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonAvatarMode: 'default',
+      hexAvatarDesc: 'Hex avatar',
+      staffAgents: DEFAULT_STAFF_AGENTS,
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+      emptyRetryDelaysMs: [15, 20],
+      onRetryStatus: (st) => {
+        retryEvents.push(st ? { attempt: st.attempt, reason: st.reason, waitMs: st.waitMs } : null);
+      },
+    });
+
+    assert.equal(fetchCount, 2, 'Should auto-retry once and succeed on Attempt 2');
+    assert.equal(recoveredTurn.blockedOrEmpty, false);
+    assert.equal(recoveredTurn.retryAttemptsUsed, 1);
+    assert.ok(recoveredTurn.text.includes('Recovered cleanly on retry'));
+    assert.equal(retryEvents[0]?.attempt, 1);
+    assert.equal(retryEvents[0]?.reason, 'SAFETY');
+    assert.equal(retryEvents[0]?.waitMs, 15);
+    assert.equal(retryEvents[retryEvents.length - 1], null, 'Should clear retry status when done');
+
+    // 6. All retries fail post-tool (tool executes on call #3, post_tool + retries + synthesis return SAFETY):
+    // MUST preserve tool result (reactionsAdded) and NEVER emit hardcoded fake fallback string!
+    const exhaustedTurn = await runClientChatTurn({
+      model: 'gemini-4-argon',
+      customApiKey: 'AIzaTestFakeKey123456',
+      systemPrompt: 'You are Argon.',
+      history: [],
+      userMessageText: 'Check everything again.',
+      lorebook: { ...SEED_LOREBOOK_DRAWERS },
+      argonAvatarMode: 'default',
+      hexAvatarDesc: 'Hex avatar',
+      staffAgents: DEFAULT_STAFF_AGENTS,
+      argonBook: SEED_ARGON_BOOK,
+      hexBook: SEED_HEX_BOOK,
+      emptyRetryDelaysMs: [10, 10],
+    });
+
+    assert.equal(exhaustedTurn.text, '', 'Must never fabricate fake text when all retries block/empty');
+    assert.equal(exhaustedTurn.blockedOrEmpty, true);
+    assert.equal(exhaustedTurn.blockedReason, 'SAFETY');
+    assert.equal(exhaustedTurn.reactionsAdded.length, 1, 'Completed tool action before final block must still be preserved');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+
 
 
 

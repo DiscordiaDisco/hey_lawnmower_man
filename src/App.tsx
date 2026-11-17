@@ -237,7 +237,7 @@ import {
   executeGithubApi,
   GithubApiExecutionResult,
 } from './services/gemini';
-import { Dog, CloudLightning } from 'lucide-react';
+import { Dog, CloudLightning, RotateCcw, RefreshCw, AlertTriangle, X } from 'lucide-react';
 import { PWAInstallButton, OfflineIndicator } from './components/PWAInstallButton';
 
 /**
@@ -1977,6 +1977,18 @@ export default function App() {
 
   const [isSending, setIsSending] = useState<boolean>(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [retryWaitStatus, setRetryWaitStatus] = useState<{
+    attempt: number;
+    maxAttempts: number;
+    waitMs: number;
+    reason: string;
+    phase: string;
+  } | null>(null);
+  const [blockedTurnState, setBlockedTurnState] = useState<{
+    userMessageId: string;
+    reason: string;
+    attempts: number;
+  } | null>(null);
   const [shockFlash, setShockFlash] = useState<boolean>(false);
   const [isScrolledUp, setIsScrolledUp] = useState<boolean>(false);
 
@@ -2013,6 +2025,7 @@ export default function App() {
       activeAbortControllerRef.current = null;
     }
     setIsSending(false);
+    setRetryWaitStatus(null);
 
     const nowMs = Date.now();
     const timeStr = new Date(nowMs).toLocaleTimeString([], {
@@ -5250,6 +5263,8 @@ export default function App() {
     roomSnapshotDataUrl: string | null = null
   ) => {
     setErrorBanner(null);
+    setBlockedTurnState(null);
+    setRetryWaitStatus(null);
     setIsSending(true);
     isInterruptedByHexRef.current = false;
     const abortCtrl = new AbortController();
@@ -5318,6 +5333,9 @@ export default function App() {
         customApiKey,
         userTimeZone,
         abortSignal: abortCtrl.signal,
+        onRetryStatus: (status) => {
+          setRetryWaitStatus(status);
+        },
         onModelPartialTurn: (partial) => {
           if (partial.text) {
             const cleanPartial = stripToolReceiptsFromVisibleText(partial.text);
@@ -5477,10 +5495,8 @@ export default function App() {
             staffNames
           )
         );
-        if (preArgonText || (Array.isArray(data.toolBadges) && data.toolBadges.length > 0)) {
-          const initialArgonText =
-            preArgonText ||
-            `*I signal to our Sanctuary Staff while keeping my arm around your waist.*`;
+        if (preArgonText) {
+          const initialArgonText = preArgonText;
           setLatestRoomArgonReaction(initialArgonText);
           newMessages.push({
             id: `argon-${nowMs}`,
@@ -5581,19 +5597,24 @@ export default function App() {
             staffNames
           )
         );
-        const resolvedText =
-          replyContent ||
-          (Array.isArray(data.toolBadges) && data.toolBadges.length > 0
-            ? `*I pull you closer against my chest while checking the screen.* "Finished checking all the records and drawers for you, Hex. Everything is lined up."`
-            : `*I tighten my arm around you.* "I'm right here with you, Hex."`);
+        if (!replyContent || data.blockedOrEmpty) {
+          setBlockedTurnState({
+            userMessageId: userMsg.id,
+            reason:
+              data.blockedReason ||
+              data.finishReason ||
+              data.blockReason ||
+              'EMPTY_RESPONSE',
+            attempts: data.retryAttemptsUsed ?? 2,
+          });
+        } else {
+          setLatestRoomArgonReaction(replyContent);
 
-        setLatestRoomArgonReaction(resolvedText);
-
-        newMessages.push({
-          id: `argon-${nowMs}`,
-          role: 'model',
-          sender: 'argon',
-          text: resolvedText,
+          newMessages.push({
+            id: `argon-${nowMs}`,
+            role: 'model',
+            sender: 'argon',
+            text: replyContent,
             timestamp: nowMs,
             tokenUsage: data.tokenUsage,
             toolBadges: Array.isArray(data.toolBadges) ? data.toolBadges : undefined,
@@ -5616,6 +5637,7 @@ export default function App() {
                 includeSeconds: true,
               }),
           });
+        }
       }
 
       setMessages((prev) =>
@@ -5721,6 +5743,7 @@ export default function App() {
       });
     } finally {
       setIsSending(false);
+      setRetryWaitStatus(null);
       activeAbortControllerRef.current = null;
       scrollToBottom();
     }
@@ -6190,15 +6213,15 @@ export default function App() {
         const staffNames = Array.isArray(data.staffOutputs)
           ? data.staffOutputs.map((s) => s.agentName)
           : [];
-        const autonomousReply =
-          stripToolReceiptsFromVisibleText(
-            stripMergedStaffLinesFromArgonOutput(
-              (data.preStaffArgonText || data.text || '').trim(),
-              staffNames
-            )
-          ) ||
-          `*I tuck the blanket higher around your shoulders while you rest in my lap, checking the barometric pressure on your phone before setting it back down.*`;
-        setLatestRoomArgonReaction(autonomousReply);
+        const autonomousReply = stripToolReceiptsFromVisibleText(
+          stripMergedStaffLinesFromArgonOutput(
+            (data.preStaffArgonText || data.text || '').trim(),
+            staffNames
+          )
+        );
+        if (autonomousReply) {
+          setLatestRoomArgonReaction(autonomousReply);
+        }
 
         const isChatAllowed =
           heartbeatConfig.allowVisibleChatMessage &&
@@ -6231,7 +6254,9 @@ export default function App() {
 
         const addedMsgs: ChatMessage[] = [];
         if (isChatAllowed) {
-          addedMsgs.push(autoMsg);
+          if (autonomousReply) {
+            addedMsgs.push(autoMsg);
+          }
           if (Array.isArray(data.staffOutputs)) {
             data.staffOutputs.forEach((staffOut, idx) => {
               const cleanStaffText = stripToolReceiptsFromVisibleText(
@@ -7327,17 +7352,31 @@ export default function App() {
                 />
               ))}
 
-              {/* Stream / Loading State for Argon with Stop / Interrupt Button */}
+              {/* Stream / Loading State for Argon with Auto-Retry Timer & Stop / Interrupt Button */}
               {isSending && (
                 <div
                   role="status"
                   aria-live="polite"
-                  className="rounded-2xl p-3 bubble-smoked-glass text-xs font-mono text-[#e8c686] flex items-center justify-between gap-2 border border-[#8e6d3b]/50 shadow-md"
+                  className="rounded-2xl p-3 bg-[rgba(230,168,181,0.08)] backdrop-blur-md text-xs font-mono text-[#E6A8B5] flex items-center justify-between gap-2 border border-[#D4AF37]/50 shadow-md"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping shrink-0" />
-                    <span className="font-semibold text-amber-200">Argon is thinking...</span>
-                    <span className="hidden sm:inline text-[11px] text-[#b59874] truncate">({activeModelId})</span>
+                    {retryWaitStatus ? (
+                      <RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin shrink-0" />
+                    ) : (
+                      <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#D4AF37] animate-ping shrink-0" />
+                    )}
+                    <span className="font-semibold text-[#f5d79b] truncate">
+                      {retryWaitStatus
+                        ? `Blocked/empty turn (${retryWaitStatus.reason}) — retrying in ${(
+                            retryWaitStatus.waitMs / 1000
+                          ).toFixed(1)}s (${retryWaitStatus.attempt}/${retryWaitStatus.maxAttempts})...`
+                        : 'Argon is thinking...'}
+                    </span>
+                    {!retryWaitStatus && (
+                      <span className="hidden sm:inline text-[11px] text-[#E6A8B5]/70 truncate">
+                        ({activeModelId})
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
@@ -7345,9 +7384,9 @@ export default function App() {
                       onClick={handleStopThinking}
                       aria-label="Stop Argon generation"
                       title="Stop Argon's response to add new information or interrupt"
-                      className="px-3 py-1.5 rounded-full bg-red-950 hover:bg-red-900 border border-red-500/80 text-red-100 text-xs font-semibold cursor-pointer flex items-center gap-1.5 active:scale-95 transition-all shadow-sm"
+                      className="min-h-[44px] px-3.5 py-2 rounded-full bg-[#161215]/90 hover:bg-red-950/80 border border-[#E6A8B5]/60 text-[#f8d7df] text-xs font-semibold cursor-pointer flex items-center gap-1.5 active:scale-95 transition-all shadow-sm"
                     >
-                      <span className="text-sm leading-none">⏹️</span>
+                      <X className="w-3.5 h-3.5" />
                       <span>Stop</span>
                     </button>
                   </div>
@@ -7362,9 +7401,59 @@ export default function App() {
                   className="rounded-2xl p-3 bubble-smoked-glass text-xs font-mono text-[#e8c686] flex items-center justify-between"
                 >
                   <span>
-                    🐾 {typingStaffAgent.name} ({typingStaffAgent.jobTitle}) is typing in character...
+                    {typingStaffAgent.name} ({typingStaffAgent.jobTitle}) is typing in character...
                   </span>
                   <span className="text-[#b59874]">{typingStaffAgent.model}</span>
+                </div>
+              )}
+
+              {/* Non-Destructive Retry Card When All Auto-Retries Yielded an Empty / Blocked Turn */}
+              {blockedTurnState && !isSending && (
+                <div
+                  role="alert"
+                  data-testid="blocked-turn-retry-banner"
+                  className="rounded-2xl p-3.5 bg-[rgba(230,168,181,0.08)] backdrop-blur-md border border-[#D4AF37]/70 text-xs font-mono text-[#f7e7ec] shadow-lg"
+                >
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-[#D4AF37] shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[#f3d48f]">
+                          Response Blocked or Empty ({blockedTurnState.reason})
+                        </div>
+                        <p className="mt-1 text-[11px] text-[#E6A8B5]/90 leading-relaxed">
+                          Retried automatically ({blockedTurnState.attempts}x) with safety &amp; turn-recovery adjustments, but {activeModelId} returned no visible output. Your message and attachments remain intact.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        data-testid="retry-blocked-turn-btn"
+                        onClick={() => {
+                          const targetUser =
+                            messages.find((m) => m.id === blockedTurnState.userMessageId) ||
+                            [...messages].reverse().find((m) => m.role === 'user');
+                          setBlockedTurnState(null);
+                          if (targetUser) {
+                            handleResendUserMessage(targetUser);
+                          }
+                        }}
+                        className="min-h-[44px] px-4 py-2 rounded-xl bg-[#161215] hover:bg-[#231b20] border border-[#D4AF37] text-[#f6dd9c] text-xs font-semibold cursor-pointer inline-flex items-center gap-2 active:scale-95 transition-all"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-[#D4AF37]" />
+                        <span>Retry Turn</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setBlockedTurnState(null)}
+                        className="min-h-[44px] px-3.5 py-2 rounded-xl bg-[#161215]/70 hover:bg-[#161215] border border-[#E6A8B5]/40 text-[#E6A8B5] text-xs cursor-pointer inline-flex items-center gap-1.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Dismiss</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 

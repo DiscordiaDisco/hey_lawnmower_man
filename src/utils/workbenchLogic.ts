@@ -41,6 +41,12 @@ import {
   normalizeGeminiGenerateContentResult,
   extractSafeGeminiText,
   extractSafeGeminiFunctionCalls,
+  DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS,
+  PERMISSIVE_GEMINI_SAFETY_SETTINGS,
+  inspectGeminiResponseBlockOrEmpty,
+  buildRetryAdjustedBrainConfig,
+  waitWithAbortSignal,
+  type ResponseEmptyOrBlockedInfo,
 } from '../services/gemini';
 import {
   DEFAULT_ARGON_SYS_PROMPT,
@@ -77,6 +83,12 @@ export {
   ensureGithubBranchExists,
   isHeyLawnmowerManRuntimeStatePath,
   sniffMimeTypeFromBase64,
+  DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS,
+  PERMISSIVE_GEMINI_SAFETY_SETTINGS,
+  inspectGeminiResponseBlockOrEmpty,
+  buildRetryAdjustedBrainConfig,
+  waitWithAbortSignal,
+  type ResponseEmptyOrBlockedInfo,
 };
 
 export const DEFAULT_GIST_ID = '53d05bcdd9b06cb8e2cce4efa838be09';
@@ -7067,6 +7079,14 @@ async function callOpenAICompatibleBrain(params: {
     model: route.model,
     messages,
   };
+  if (
+    config &&
+    typeof (config as any).temperature === 'number' &&
+    Number.isFinite((config as any).temperature) &&
+    route.model !== 'deepseek-reasoner'
+  ) {
+    requestBody.temperature = (config as any).temperature;
+  }
   if (openAITools.length > 0) {
     requestBody.tools = openAITools;
     requestBody.tool_choice = 'auto';
@@ -7150,11 +7170,19 @@ async function callOpenAICompatibleBrain(params: {
   );
   const totalTokens = Number(usage.total_tokens || promptTokens + completionTokens);
 
+  const normalizedOpenAiFinishReason =
+    typeof choice?.finish_reason === 'string' && choice.finish_reason.trim()
+      ? choice.finish_reason.trim().toUpperCase()
+      : undefined;
+
   const syntheticResult = {
     text: textContent,
     functionCalls: functionCalls.length > 0 ? functionCalls : undefined,
     candidates: [
       {
+        ...(normalizedOpenAiFinishReason
+          ? { finishReason: normalizedOpenAiFinishReason }
+          : {}),
         content: {
           role: 'model',
           parts: candidateParts.length > 0 ? candidateParts : [{ text: '' }],
@@ -7162,6 +7190,9 @@ async function callOpenAICompatibleBrain(params: {
         },
       },
     ],
+    ...(normalizedOpenAiFinishReason === 'CONTENT_FILTER'
+      ? { promptFeedback: { blockReason: 'CONTENT_FILTER' } }
+      : {}),
     usageMetadata: {
       promptTokenCount: promptTokens,
       candidatesTokenCount: completionTokens,
@@ -9679,7 +9710,7 @@ export async function runClientStaffTask(params: {
         reactFallback
       );
     } catch {
-      argonReaction = `*I reach down to pat ${agent.name}'s head while keeping my other arm steady around your waist.* "Good work, ${agent.name}. Leave the report right by the teapot."`;
+      argonReaction = '';
     }
   }
 
@@ -10129,6 +10160,16 @@ export async function runClientChatTurn(params: {
     text?: string;
     toolBadges?: ToolBadgeEvent[];
   }) => void;
+  onRetryStatus?: (
+    status: {
+      attempt: number;
+      maxAttempts: number;
+      waitMs: number;
+      reason: string;
+      phase: 'initial' | 'post_tool' | 'synthesis';
+    } | null
+  ) => void;
+  emptyRetryDelaysMs?: number[];
   thinkingBudget?: number;
   thinkingLevel?: string | number;
   userTimeZone?: string;
@@ -10159,6 +10200,8 @@ export async function runClientChatTurn(params: {
     staffAgents,
     argonBook,
     onModelPartialTurn,
+    onRetryStatus,
+    emptyRetryDelaysMs,
     hexBook,
     customApiKey,
     abortSignal,
@@ -10677,7 +10720,86 @@ export async function runClientChatTurn(params: {
     cleanUserMessageText,
   ].join(' ');
 
-  const callGenerate = async (currentContents: Content[]) => {
+  const effectiveRetryDelaysMs = Array.isArray(emptyRetryDelaysMs)
+    ? emptyRetryDelaysMs
+    : [...DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS];
+  let lastBlockInfo: ResponseEmptyOrBlockedInfo | null = null;
+  let retryAttemptsUsed = 0;
+
+  const runGenerateWithAutoRetry = async (
+    targetContents: Content[],
+    baseConfig: Record<string, unknown>,
+    phase: 'initial' | 'post_tool' | 'synthesis'
+  ) => {
+    const requestedModel = (params.model || 'gemini-4-argon').trim();
+    const initialConfig: Record<string, unknown> = {
+      safetySettings: [...PERMISSIVE_GEMINI_SAFETY_SETTINGS],
+      ...baseConfig,
+    };
+
+    let genResult = await generateContentWithAutoFallback({
+      model: requestedModel,
+      contents: targetContents,
+      config: initialConfig,
+      customApiKey,
+      thinkingBudget,
+      thinkingLevel,
+    });
+
+    let blockInfo = inspectGeminiResponseBlockOrEmpty(genResult.result);
+    if (blockInfo.isEmptyOrBlocked && effectiveRetryDelaysMs.length > 0) {
+      for (let retryIdx = 0; retryIdx < effectiveRetryDelaysMs.length; retryIdx++) {
+        if (abortSignal?.aborted) {
+          throw new Error('Turn interrupted by user');
+        }
+        const waitMs = effectiveRetryDelaysMs[retryIdx];
+        onRetryStatus?.({
+          attempt: retryIdx + 1,
+          maxAttempts: effectiveRetryDelaysMs.length,
+          waitMs,
+          reason: blockInfo.reason,
+          phase,
+        });
+        await waitWithAbortSignal(waitMs, abortSignal);
+        if (abortSignal?.aborted) {
+          throw new Error('Turn interrupted by user');
+        }
+
+        const adjusted = buildRetryAdjustedBrainConfig({
+          baseConfig: initialConfig,
+          model: requestedModel,
+          retryAttempt: retryIdx + 1,
+          thinkingLevel,
+          blockInfo,
+        });
+        retryAttemptsUsed += 1;
+
+        const retryRes = await generateContentWithAutoFallback({
+          model: requestedModel,
+          contents: targetContents,
+          config: adjusted.config,
+          customApiKey,
+          thinkingBudget,
+          thinkingLevel: adjusted.thinkingLevel ?? thinkingLevel,
+        });
+        const retryBlockInfo = inspectGeminiResponseBlockOrEmpty(retryRes.result);
+        genResult = retryRes;
+        blockInfo = retryBlockInfo;
+        if (!retryBlockInfo.isEmptyOrBlocked) {
+          break;
+        }
+      }
+      onRetryStatus?.(null);
+    }
+
+    lastBlockInfo = blockInfo.isEmptyOrBlocked ? blockInfo : null;
+    return genResult;
+  };
+
+  const callGenerate = async (
+    currentContents: Content[],
+    phase: 'initial' | 'post_tool' = 'initial'
+  ) => {
     // Prefix-cache friendly systemInstruction:
     // 1. Static prefix FIRST (base prompt + static avatar/staff + books + static lorebook drawers)
     //    so Token 0..N remains 100% byte-for-byte identical for Gemini & DeepSeek Implicit Prefix Caching!
@@ -10722,19 +10844,16 @@ export async function runClientChatTurn(params: {
     if (abortSignal?.aborted) {
       throw new Error('Turn interrupted by user');
     }
-    const genResult = await generateContentWithAutoFallback({
-      model: (params.model || 'gemini-4-argon').trim(),
-      contents: currentContents,
-      config: {
+    const genResult = await runGenerateWithAutoRetry(
+      currentContents,
+      {
         systemInstruction: fullSystemInstruction,
         ...(allowedArgonTools.length > 0
           ? { tools: [{ functionDeclarations: allowedArgonTools }] }
           : {}),
       },
-      customApiKey,
-      thinkingBudget,
-      thinkingLevel,
-    });
+      phase
+    );
     const { result, modelUsed, nativeReasoning } = genResult;
     activeModelUsed = modelUsed;
     if (genResult.routedModel) {
@@ -10790,7 +10909,7 @@ export async function runClientChatTurn(params: {
     return result;
   };
 
-  let response = await callGenerate(contents);
+  let response = await callGenerate(contents, 'initial');
   let loopCount = 0;
   const maxToolLoops = Math.min(
     Math.max(1, params.maxToolLoops ?? MAX_ARGON_TOOL_LOOPS),
@@ -12060,7 +12179,7 @@ export async function runClientChatTurn(params: {
       break;
     }
 
-    response = await callGenerate(contents);
+    response = await callGenerate(contents, 'post_tool');
     responseFunctionCalls = extractSafeGeminiFunctionCalls(response);
   }
 
@@ -12093,17 +12212,14 @@ export async function runClientChatTurn(params: {
         });
       }
 
-      const synthesisRes = await generateContentWithAutoFallback({
-        model: (params.model || 'gemini-4-argon').trim(),
-        contents: finalSynthesisContents,
-        config: {
+      const synthesisRes = await runGenerateWithAutoRetry(
+        finalSynthesisContents,
+        {
           systemInstruction: latestFullSystemInstruction,
           // Explicitly omit tools so the model cannot loop tools again and must respond with speech!
         },
-        customApiKey,
-        thinkingBudget,
-        thinkingLevel,
-      });
+        'synthesis'
+      );
 
       const synthText = extractSafeGeminiText(synthesisRes.result).trim();
       if (synthText) {
@@ -12111,14 +12227,18 @@ export async function runClientChatTurn(params: {
           stripMergedStaffLinesFromArgonOutput(synthText, allStaffNames)
         );
       }
+      if (!postToolArgonText.trim()) {
+        const synthBlockInfo = inspectGeminiResponseBlockOrEmpty(synthesisRes.result);
+        if (synthBlockInfo.isEmptyOrBlocked) {
+          lastBlockInfo = synthBlockInfo;
+        }
+      }
     } catch (synthErr) {
+      if (synthErr instanceof Error && synthErr.message.includes('Turn interrupted by user')) {
+        throw synthErr;
+      }
       console.warn('Synthesis fallback call failed:', synthErr);
     }
-  }
-
-  // Hard guarantee: Argon NEVER returns an empty message when toolBadges are present or when responding to Hex
-  if (!postToolArgonText.trim() && !preStaffArgonText.trim()) {
-    postToolArgonText = `*I pull you closer against my chest while reviewing the screen.* "Finished checking all the records and drawers for you, Hex. Everything is lined up."`;
   }
 
   const replyText = [preStaffArgonText, postToolArgonText].filter(Boolean).join('\n\n').trim();
@@ -12176,7 +12296,7 @@ export async function runClientChatTurn(params: {
           reactFallback
         );
       } catch {
-        argonStaffFollowUp = `*I reach down to pat ${lastStaffOut.agentName}'s head while keeping my other arm steady around your waist.* "Good work, ${lastStaffOut.agentName}."`;
+        argonStaffFollowUp = '';
       }
     }
   }
@@ -12244,10 +12364,21 @@ export async function runClientChatTurn(params: {
     recordSessionModelToolReceipt(argonStaffFollowUp, toolResultsSummary);
   }
 
+  const isTurnBlockedOrEmpty =
+    staffOutputs.length === 0 && !primaryArgonBubbleText.trim();
+  const effectiveBlockedReason = isTurnBlockedOrEmpty
+    ? lastBlockInfo?.reason || 'EMPTY_RESPONSE'
+    : undefined;
+
   return {
     text: primaryArgonBubbleText,
     preStaffArgonText,
     postStaffArgonText: argonStaffFollowUp,
+    blockedOrEmpty: isTurnBlockedOrEmpty,
+    blockedReason: effectiveBlockedReason,
+    finishReason: isTurnBlockedOrEmpty ? lastBlockInfo?.finishReason : undefined,
+    blockReason: isTurnBlockedOrEmpty ? lastBlockInfo?.blockReason : undefined,
+    retryAttemptsUsed,
     modelUsed: activeModelUsed,
     nativeReasoning: latestNativeReasoning,
     thoughtTokens: accumulatedThoughtTokens > 0 ? accumulatedThoughtTokens : undefined,

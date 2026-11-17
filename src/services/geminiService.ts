@@ -1,4 +1,37 @@
-import { GoogleGenAI, FunctionDeclaration, Type, Content, Part } from '@google/genai';
+import {
+  GoogleGenAI,
+  FunctionDeclaration,
+  Type,
+  Content,
+  Part,
+  HarmCategory,
+  HarmBlockThreshold,
+} from '@google/genai';
+
+export const DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS = [1500, 2000] as const;
+
+export const PERMISSIVE_GEMINI_SAFETY_SETTINGS = [
+  {
+    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+  {
+    category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+    threshold: HarmBlockThreshold.BLOCK_NONE,
+  },
+];
 
 /**
  * Checks whether the given model is gemini-4-argon or Gemini 3+ (where thinking_budget,
@@ -400,6 +433,225 @@ export function normalizeGeminiGenerateContentResult<T>(rawResult: T): T {
     }
   }
   return rawResult;
+}
+
+export interface ResponseEmptyOrBlockedInfo {
+  isEmptyOrBlocked: boolean;
+  reason: string;
+  finishReason?: string;
+  blockReason?: string;
+  hasText: boolean;
+  hasFunctionCalls: boolean;
+  thoughtOnly: boolean;
+}
+
+const BLOCKED_FINISH_REASONS = new Set([
+  'SAFETY',
+  'PROHIBITED_CONTENT',
+  'RECITATION',
+  'BLOCKLIST',
+  'SPII',
+  'IMAGE_SAFETY',
+  'CONTENT_FILTER',
+  'MALFORMED_FUNCTION_CALL',
+]);
+
+/**
+ * Inspects a Gemini or OpenAI-normalized GenerateContentResponse to detect empty candidates,
+ * prompt/safety/finishReason blocks, or thought-only responses with 0 visible text and 0 tool calls.
+ */
+export function inspectGeminiResponseBlockOrEmpty(
+  response: unknown
+): ResponseEmptyOrBlockedInfo {
+  if (!response || typeof response !== 'object') {
+    return {
+      isEmptyOrBlocked: true,
+      reason: 'EMPTY_RESPONSE',
+      hasText: false,
+      hasFunctionCalls: false,
+      thoughtOnly: false,
+    };
+  }
+
+  const resp = response as Record<string, any>;
+  const rawBlockReason = resp.promptFeedback?.blockReason;
+  const blockReason =
+    typeof rawBlockReason === 'string' && rawBlockReason.trim()
+      ? rawBlockReason.trim().toUpperCase()
+      : undefined;
+
+  const candidates = Array.isArray(resp.candidates) ? resp.candidates : [];
+  const candidate0 = candidates[0] as Record<string, any> | undefined;
+  const rawFinishReason = candidate0?.finishReason ?? candidate0?.finish_reason;
+  const finishReason =
+    typeof rawFinishReason === 'string' && rawFinishReason.trim()
+      ? rawFinishReason.trim().toUpperCase()
+      : undefined;
+
+  const visibleText = extractSafeGeminiText(response).trim();
+  const hasText = visibleText.length > 0;
+  const fnCalls = extractSafeGeminiFunctionCalls(response);
+  const hasFunctionCalls = fnCalls.length > 0;
+
+  let hasThoughtText = false;
+  const parts = candidate0?.content?.parts;
+  if (Array.isArray(parts)) {
+    for (const p of parts) {
+      if (
+        p &&
+        typeof p === 'object' &&
+        (p as any).thought === true &&
+        typeof (p as any).text === 'string' &&
+        (p as any).text.trim().length > 0
+      ) {
+        hasThoughtText = true;
+        break;
+      }
+    }
+  }
+  const thoughtOnly = !hasText && !hasFunctionCalls && hasThoughtText;
+
+  if (hasText || hasFunctionCalls) {
+    return {
+      isEmptyOrBlocked: false,
+      reason: 'OK',
+      finishReason,
+      blockReason,
+      hasText,
+      hasFunctionCalls,
+      thoughtOnly: false,
+    };
+  }
+
+  let reason = 'EMPTY_RESPONSE';
+  if (blockReason) {
+    reason = blockReason;
+  } else if (finishReason && BLOCKED_FINISH_REASONS.has(finishReason)) {
+    reason = finishReason;
+  } else if (thoughtOnly) {
+    reason = 'THOUGHT_ONLY_EMPTY';
+  } else if (finishReason && finishReason !== 'STOP') {
+    reason = finishReason;
+  } else if (candidates.length === 0) {
+    reason = 'EMPTY_CANDIDATE';
+  }
+
+  return {
+    isEmptyOrBlocked: true,
+    reason,
+    finishReason,
+    blockReason,
+    hasText: false,
+    hasFunctionCalls: false,
+    thoughtOnly,
+  };
+}
+
+/**
+ * Sleeps for `ms` milliseconds while respecting an optional AbortSignal so clicking Stop cancels immediately.
+ */
+export async function waitWithAbortSignal(
+  ms: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new Error('Turn interrupted by user');
+  }
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Turn interrupted by user'));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+/**
+ * Builds adjusted config + thinking settings for automatic retry after an empty or blocked turn:
+ * - Applies permissive BLOCK_NONE safetySettings
+ * - Adjusts temperature safely (preserved for Gemini 2.5 / DeepSeek / GLM / Kimi; stripped cleanly by sanitizeGeminiConfig for Gemini 3/4)
+ * - Steps down HIGH thinkingLevel on Gemini 3/4 if thoughts consumed output or repeated empty responses occur
+ * - Appends a concise non-empty / schema recovery directive to systemInstruction
+ */
+export function buildRetryAdjustedBrainConfig(params: {
+  baseConfig?: Record<string, unknown>;
+  model?: string;
+  retryAttempt: number;
+  thinkingLevel?: string | number;
+  blockInfo?: ResponseEmptyOrBlockedInfo;
+}): {
+  config: Record<string, unknown>;
+  thinkingLevel: string | number | undefined;
+} {
+  const { baseConfig = {}, model, retryAttempt, thinkingLevel, blockInfo } = params;
+  const nextConfig: Record<string, unknown> = {
+    ...baseConfig,
+  };
+
+  if (!Array.isArray(nextConfig.safetySettings) || nextConfig.safetySettings.length === 0) {
+    nextConfig.safetySettings = [...PERMISSIVE_GEMINI_SAFETY_SETTINGS];
+  } else {
+    nextConfig.safetySettings = [...PERMISSIVE_GEMINI_SAFETY_SETTINGS];
+  }
+
+  const baseTemp =
+    typeof nextConfig.temperature === 'number' && Number.isFinite(nextConfig.temperature)
+      ? nextConfig.temperature
+      : 0.9;
+  const isFilterBlock = Boolean(
+    blockInfo?.blockReason ||
+      (blockInfo?.finishReason &&
+        ['SAFETY', 'PROHIBITED_CONTENT', 'CONTENT_FILTER', 'BLOCKLIST', 'SPII'].includes(
+          blockInfo.finishReason
+        ))
+  );
+  if (!isGemini3Or4Model(model)) {
+    nextConfig.temperature = isFilterBlock
+      ? Math.max(0.55, Number((0.85 - retryAttempt * 0.15).toFixed(2)))
+      : retryAttempt % 2 === 1
+      ? Math.min(1.15, Number((baseTemp + 0.12).toFixed(2)))
+      : Math.max(0.65, Number((baseTemp - 0.15).toFixed(2)));
+  }
+
+  let nextThinkingLevel = thinkingLevel;
+  const normalizedLevel = normalizeThinkingLevel(thinkingLevel);
+  if (isGemini3Or4Model(model) && (blockInfo?.thoughtOnly || retryAttempt >= 1)) {
+    if (normalizedLevel === 'HIGH') {
+      nextThinkingLevel = retryAttempt >= 2 ? 'LOW' : 'MEDIUM';
+    } else if (normalizedLevel === 'MEDIUM' && retryAttempt >= 2) {
+      nextThinkingLevel = 'LOW';
+    }
+  }
+
+  const reasonLabel = blockInfo?.reason || 'EMPTY_RESPONSE';
+  const recoveryHint =
+    reasonLabel === 'MALFORMED_FUNCTION_CALL'
+      ? `[RETRY DIRECTIVE #${retryAttempt} — RECOVER FROM ${reasonLabel}: Emit valid JSON tool arguments or respond directly in prose without malformed function calls.]`
+      : isFilterBlock
+      ? `[RETRY DIRECTIVE #${retryAttempt} — COMPLETE TURN AFTER ${reasonLabel}: Deliver your full in-character response directly to Hex with grounded physical presence and dialogue without cutting off or returning empty output.]`
+      : `[RETRY DIRECTIVE #${retryAttempt} — COMPLETE TURN AFTER ${reasonLabel}: Do NOT return an empty response or thoughts-only output. Speak directly to Hex in character with your action beat and reply.]`;
+
+  if (typeof nextConfig.systemInstruction === 'string') {
+    nextConfig.systemInstruction = nextConfig.systemInstruction.trim()
+      ? `${nextConfig.systemInstruction.trim()}\n\n${recoveryHint}`
+      : recoveryHint;
+  } else {
+    nextConfig.systemInstruction = recoveryHint;
+  }
+
+  return {
+    config: nextConfig,
+    thinkingLevel: nextThinkingLevel,
+  };
 }
 
 /**

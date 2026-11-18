@@ -4809,3 +4809,74 @@ test('Live RP On/Off Toggle: ephemeral systemInstruction injection, zero-residue
     delete (globalThis as Record<string, unknown>).localStorage;
   }
 });
+
+test('Markdown code-block parser ignores inline triple backticks (` ``` `), requires line-start fences, and header RP toggle is wired in App.tsx', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+
+  // 1. Inline triple backticks in prose must NEVER open a fenced code block or invert prose/code
+  const proseWithInlineTripleAndRealBlock = [
+    '*I look up from the ledger.* Notice how the regex checks line-start fences (` ``` `) instead of inline spans or `` ``` ``.',
+    '',
+    '```ts',
+    'const inlineFence = "```";',
+    'const regex = /^```/gm;',
+    'console.log(inlineFence, regex);',
+    '```',
+    '',
+    'All clean after the code block.',
+  ].join('\n');
+
+  const segments = parseMessageSegments(proseWithInlineTripleAndRealBlock);
+  assert.equal(segments.length, 3, 'Should produce exactly 3 segments: prose, code block, trailing prose');
+  assert.equal(segments[0].type, 'text');
+  assert.ok(segments[0].content.includes('instead of inline spans'));
+  assert.equal(segments[1].type, 'code');
+  assert.equal(segments[1].language, 'ts');
+  assert.equal(
+    segments[1].content,
+    'const inlineFence = "```";\nconst regex = /^```/gm;\nconsole.log(inlineFence, regex);'
+  );
+  assert.equal(segments[2].type, 'text');
+  assert.ok(segments[2].content.includes('All clean after the code block.'));
+
+  // 2. Nested 4-backtick outer fence containing a 3-backtick inner fence
+  const nestedFence = [
+    'Example markdown:',
+    '````markdown',
+    '```js',
+    'alert(1);',
+    '```',
+    '````',
+    'End.',
+  ].join('\n');
+  const nestedSegs = parseMessageSegments(nestedFence);
+  assert.equal(nestedSegs.length, 3);
+  assert.equal(nestedSegs[1].type, 'code');
+  assert.equal(nestedSegs[1].language, 'markdown');
+  assert.equal(nestedSegs[1].content, '```js\nalert(1);\n```');
+
+  // 3. Inline markdown tokenizes (` ``` `) and `` ``` `` cleanly as code tokens
+  const inlineTokens = parseInlineMarkdown('Try (` ``` `) or `` ``` `` and **bold**!');
+  const codeTokens = inlineTokens.filter((t) => t.type === 'code');
+  assert.equal(codeTokens.length, 2);
+  assert.equal(codeTokens[0].text, '```');
+  assert.equal(codeTokens[1].text, '```');
+  assert.ok(inlineTokens.some((t) => t.type === 'bold' && t.text === 'bold'));
+
+  // 4. TTS extractArgonSpeechText preserves prose containing (` ``` `) and removes only real fenced code block
+  const ttsText = extractArgonSpeechText(proseWithInlineTripleAndRealBlock, 'full_clean');
+  assert.ok(ttsText.includes('Notice how the regex checks line-start fences'));
+  assert.ok(ttsText.includes('All clean after the code block.'));
+  assert.equal(ttsText.includes('console.log'), false, 'TTS must strip the real fenced code block');
+
+  // 5. Verify App.tsx renders header-rp-mode-toggle inside a flex-wrap utility bar so mobile cannot clip it
+  const appSource = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+  assert.ok(appSource.includes('data-testid="header-rp-mode-toggle"'));
+  assert.ok(appSource.includes('data-testid="chat-rp-mode-toggle"'));
+  const utilityBarIdx = appSource.indexOf('Row 2: Utility Bar with Space');
+  assert.ok(utilityBarIdx !== -1);
+  const utilitySnippet = appSource.slice(utilityBarIdx, utilityBarIdx + 350);
+  assert.ok(utilitySnippet.includes('flex-wrap'), 'Header Row 2 utility bar must wrap cleanly on narrow mobile viewports');
+});
+

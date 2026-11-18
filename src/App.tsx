@@ -6873,11 +6873,11 @@ export default function App() {
             </div>
           </div>
 
-          {/* Row 2: Utility Bar with Space (Pulse, Tickets, Gramophone, and CTX Pill fitted in the empty space) */}
-          <div className="flex items-center justify-between gap-1 w-full">
-            <div className="flex items-center gap-1 shrink-0">
+          {/* Row 2: Utility Bar with Space (Pulse, Tickets, Gramophone, Vault, RP Toggle, Eye, and CTX Pill wrapped cleanly for mobile) */}
+          <div className="flex flex-wrap items-center justify-between gap-1 w-full min-w-0">
+            <div className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
               <div
-                className={`inline-flex items-center rounded border text-[9px] font-mono whitespace-nowrap overflow-hidden ${
+                className={`inline-flex items-center rounded border text-[9px] font-mono whitespace-nowrap overflow-hidden shrink-0 ${
                   autonomousHeartbeatEnabled && heartbeatConfig.enabled
                     ? 'bg-emerald-950/80 border-emerald-400/70 text-emerald-200'
                     : 'bg-[#140f12] border-[#6b5331]/60 text-[#9e8664]'
@@ -6923,7 +6923,7 @@ export default function App() {
                 onClick={() => setIsAgentFixQueueOpen(true)}
                 data-testid="header-agent-fix-queue-btn"
                 title="Argon & Haiku's Direct Coding Agent Fix/Feature Request Queue"
-                className="px-1.5 py-0.5 rounded bg-[#26181c] border border-[#e6c88c]/70 text-[#ffe5a3] text-[9px] font-mono cursor-pointer whitespace-nowrap"
+                className="px-1.5 py-0.5 rounded bg-[#26181c] border border-[#e6c88c]/70 text-[#ffe5a3] text-[9px] font-mono cursor-pointer whitespace-nowrap shrink-0"
               >
                 🛠️ {agentFixRequests.length}
               </button>
@@ -6932,7 +6932,7 @@ export default function App() {
                 onClick={() => setIsTicketScratchpadOpen(true)}
                 data-testid="header-ticket-scratchpad-btn"
                 title="Collaborative Feature & Fix Scratchpad (Dual 'Done' Lock)"
-                className={`px-1.5 py-0.5 rounded border text-[9px] font-mono cursor-pointer whitespace-nowrap ${
+                className={`px-1.5 py-0.5 rounded border text-[9px] font-mono cursor-pointer whitespace-nowrap shrink-0 ${
                   ticketScratchpad.hexDone && ticketScratchpad.argonDone
                     ? 'bg-emerald-950/80 border-emerald-400 text-emerald-200 font-semibold'
                     : ticketScratchpad.items.length > 0
@@ -6948,7 +6948,7 @@ export default function App() {
                 onClick={() => setIsGramophoneOpen((prev) => !prev)}
                 data-testid="open-gramophone-drawer-btn"
                 title="Sanctuary Gramophone / Ambient Music Generator (lyria-3.5)"
-                className={`px-1.5 py-0.5 rounded border text-[9px] font-mono cursor-pointer whitespace-nowrap ${
+                className={`px-1.5 py-0.5 rounded border text-[9px] font-mono cursor-pointer whitespace-nowrap shrink-0 ${
                   isGramophoneOpen || activeTrackId
                     ? 'bg-amber-900/80 border-[#ffe5a3] text-[#fff5e4]'
                     : 'bg-[#26181c] border-[#e6c88c]/70 text-[#ffe5a3]'
@@ -6961,11 +6961,34 @@ export default function App() {
                 onClick={() => setIsVaultOpen(true)}
                 data-testid="header-vault-btn"
                 title="Sanctuary Media Vault & Phone Folder (voice recordings, images, docs)"
-                className="px-1.5 py-0.5 rounded bg-[#26181c] hover:bg-[#382329] border border-[#e6c88c]/70 text-[#ffe5a3] text-[9px] font-mono cursor-pointer whitespace-nowrap"
+                className="px-1.5 py-0.5 rounded bg-[#26181c] hover:bg-[#382329] border border-[#e6c88c]/70 text-[#ffe5a3] text-[9px] font-mono cursor-pointer whitespace-nowrap shrink-0"
               >
                 🗄️ Vault
               </button>
-              <div className="relative">
+              <button
+                type="button"
+                data-testid="header-rp-mode-toggle"
+                aria-pressed={rpModeEnabled}
+                onClick={() => handleToggleRpMode()}
+                title={
+                  rpModeEnabled
+                    ? 'RP / Intimate Mode ON — Ephemeral creative clearance injected into systemInstruction only. Tap to turn OFF with zero chat residue.'
+                    : 'RP / Intimate Mode OFF — Clean baseline mode. Tap to turn ON ephemeral RP clearance.'
+                }
+                className={`px-1.5 py-0.5 rounded border text-[9px] font-mono cursor-pointer whitespace-nowrap inline-flex items-center gap-1 shrink-0 transition-all ${
+                  rpModeEnabled
+                    ? 'bg-[rgba(230,168,181,0.2)] border-[#D4AF37] text-[#ffe5a3] font-bold shadow-[0_0_8px_rgba(212,175,55,0.35)]'
+                    : 'bg-[#161215] border-[#E6A8B5]/45 text-[#E6A8B5] hover:border-[#D4AF37]/70'
+                }`}
+              >
+                <Flame
+                  className={`w-2.5 h-2.5 shrink-0 ${
+                    rpModeEnabled ? 'text-[#D4AF37]' : 'text-[#E6A8B5]/80'
+                  }`}
+                />
+                <span>{rpModeEnabled ? 'RP ON' : 'RP OFF'}</span>
+              </button>
+              <div className="relative shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsEyeActionSheetOpen((prev) => !prev)}

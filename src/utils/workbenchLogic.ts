@@ -4234,34 +4234,86 @@ export interface ParsedSegment {
 
 /**
  * Parses assistant Markdown into alternating prose ('text') and fenced 'code' blocks.
+ * Fenced code blocks MUST open and close on backtick fences at the start of a line
+ * (optional 0-3 leading spaces), so inline triple-backtick spans in prose such as
+ * (` ``` `) never prematurely split or invert code blocks.
  */
 export function parseMessageSegments(markdown: string): ParsedSegment[] {
   if (!markdown) return [];
-  const segments: ParsedSegment[] = [];
-  const fenceRegex = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g;
 
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = fenceRegex.exec(markdown)) !== null) {
-    if (match.index > lastIndex) {
-      segments.push({
-        type: 'text',
-        content: markdown.slice(lastIndex, match.index),
+  // Index every line along with its character offsets so exact newlines are preserved.
+  const lines: Array<{ text: string; start: number; end: number; nextStart: number }> = [];
+  let cursor = 0;
+  while (cursor < markdown.length) {
+    const nlIdx = markdown.indexOf('\n', cursor);
+    if (nlIdx === -1) {
+      lines.push({
+        text: markdown.slice(cursor),
+        start: cursor,
+        end: markdown.length,
+        nextStart: markdown.length,
       });
+      break;
     }
-    segments.push({
-      type: 'code',
-      language: match[1] || 'text',
-      content: match[2].replace(/\n$/, ''),
+    const lineEnd = nlIdx > cursor && markdown[nlIdx - 1] === '\r' ? nlIdx - 1 : nlIdx;
+    lines.push({
+      text: markdown.slice(cursor, lineEnd),
+      start: cursor,
+      end: lineEnd,
+      nextStart: nlIdx + 1,
     });
-    lastIndex = fenceRegex.lastIndex;
+    cursor = nlIdx + 1;
   }
 
-  if (lastIndex < markdown.length) {
+  const segments: ParsedSegment[] = [];
+  let textStartPos = 0;
+  let i = 0;
+
+  while (i < lines.length) {
+    const openLine = lines[i];
+    const openMatch = openLine.text.match(/^[ \t]{0,3}(`{3,})([^`\r\n]*)$/);
+    if (openMatch) {
+      const fenceLen = openMatch[1].length;
+      const rawInfo = (openMatch[2] || '').trim();
+      const langMatch = rawInfo.match(/^([a-zA-Z0-9_-]+)/);
+      const language = langMatch ? langMatch[1] : 'text';
+
+      // Find matching closing fence at the start of a subsequent line
+      let closeIdx = -1;
+      for (let j = i + 1; j < lines.length; j++) {
+        const closeMatch = lines[j].text.match(/^[ \t]{0,3}(`{3,})[ \t]*$/);
+        if (closeMatch && closeMatch[1].length >= fenceLen) {
+          closeIdx = j;
+          break;
+        }
+      }
+
+      if (closeIdx !== -1) {
+        if (openLine.start > textStartPos) {
+          segments.push({
+            type: 'text',
+            content: markdown.slice(textStartPos, openLine.start),
+          });
+        }
+        const closeLine = lines[closeIdx];
+        const rawCode = markdown.slice(openLine.nextStart, closeLine.start);
+        segments.push({
+          type: 'code',
+          language,
+          content: rawCode.replace(/\r?\n$/, ''),
+        });
+        textStartPos = closeLine.end;
+        i = closeIdx + 1;
+        continue;
+      }
+    }
+    i++;
+  }
+
+  if (textStartPos < markdown.length) {
     segments.push({
       type: 'text',
-      content: markdown.slice(lastIndex),
+      content: markdown.slice(textStartPos),
     });
   }
 
@@ -4388,54 +4440,127 @@ export function tokenizeStickersInText(
 
 /**
  * Parses a line of inline Markdown into structured tokens (`code`, `link`, `bold_italic`, `bold`, `italic`, `sticker`, `text`),
- * stripping raw `**`, `*`, and backtick delimiters cleanly, rendering Markdown links & raw URLs as clickable links,
+ * stripping raw `**`, `*`, and backtick delimiters cleanly, supporting backtick runs containing triple backticks
+ * (e.g. `` (` ``` `) `` or `` `` ``` `` ``), rendering Markdown links & raw URLs as clickable links,
  * and rendering `:shortcode:` Chibi Argon stickers inline.
  */
 export function parseInlineMarkdown(line: string): InlineMarkdownToken[] {
   if (!line) return [];
   const tokens: InlineMarkdownToken[] = [];
-  const tokenRegex = /(`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|\*[^*\n]+\*)/g;
+  let plainBuffer = '';
 
-  let lastIdx = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = tokenRegex.exec(line)) !== null) {
-    if (match.index > lastIdx) {
-      tokens.push(...tokenizeLinksAndStickersInText(line.slice(lastIdx, match.index), 'text'));
+  const flushPlain = () => {
+    if (plainBuffer.length > 0) {
+      tokens.push(...tokenizeLinksAndStickersInText(plainBuffer, 'text'));
+      plainBuffer = '';
     }
-    const raw = match[0];
-    if (raw.startsWith('`') && raw.endsWith('`') && raw.length >= 2) {
-      tokens.push({
-        type: 'code',
-        text: raw.slice(1, -1),
-      });
-    } else if (raw.startsWith('[') && raw.includes('](') && raw.endsWith(')')) {
-      const mdMatch = /^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(raw);
-      if (mdMatch) {
+  };
+
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+
+    // 1. CommonMark inline code spans: N consecutive backticks closed by exact N consecutive backticks
+    if (ch === '`') {
+      let openEnd = i;
+      while (openEnd < line.length && line[openEnd] === '`') {
+        openEnd++;
+      }
+      const openLen = openEnd - i;
+
+      let searchIdx = openEnd;
+      let matchedCloseStart = -1;
+      let matchedCloseEnd = -1;
+      while (searchIdx < line.length) {
+        if (line[searchIdx] === '`') {
+          let closeEnd = searchIdx;
+          while (closeEnd < line.length && line[closeEnd] === '`') {
+            closeEnd++;
+          }
+          if (closeEnd - searchIdx === openLen) {
+            matchedCloseStart = searchIdx;
+            matchedCloseEnd = closeEnd;
+            break;
+          }
+          searchIdx = closeEnd;
+        } else {
+          searchIdx++;
+        }
+      }
+
+      if (matchedCloseStart !== -1) {
+        flushPlain();
+        let inner = line.slice(openEnd, matchedCloseStart);
+        if (
+          inner.length >= 2 &&
+          inner.startsWith(' ') &&
+          inner.endsWith(' ') &&
+          inner.trim().length > 0
+        ) {
+          inner = inner.slice(1, -1);
+        }
+        tokens.push({
+          type: 'code',
+          text: inner,
+        });
+        i = matchedCloseEnd;
+        continue;
+      }
+
+      plainBuffer += line.slice(i, openEnd);
+      i = openEnd;
+      continue;
+    }
+
+    // 2. Markdown link: [text](https://...)
+    if (ch === '[') {
+      const linkMatch = line.slice(i).match(/^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/);
+      if (linkMatch) {
+        flushPlain();
         tokens.push({
           type: 'link',
-          text: mdMatch[1],
-          url: mdMatch[2],
+          text: linkMatch[1],
+          url: linkMatch[2],
         });
-      } else {
-        tokens.push(...tokenizeLinksAndStickersInText(raw, 'text'));
+        i += linkMatch[0].length;
+        continue;
       }
-    } else if (raw.startsWith('***') && raw.endsWith('***') && raw.length > 6) {
-      tokens.push(...tokenizeLinksAndStickersInText(raw.slice(3, -3), 'bold_italic'));
-    } else if (raw.startsWith('**') && raw.endsWith('**') && raw.length > 4) {
-      tokens.push(...tokenizeLinksAndStickersInText(raw.slice(2, -2), 'bold'));
-    } else if (raw.startsWith('*') && raw.endsWith('*') && raw.length > 2) {
-      tokens.push(...tokenizeLinksAndStickersInText(raw.slice(1, -1), 'italic'));
-    } else {
-      tokens.push(...tokenizeLinksAndStickersInText(raw, 'text'));
     }
-    lastIdx = tokenRegex.lastIndex;
+
+    // 3. Emphasis / Strong: ***bold_italic***, **bold**, *italic*
+    if (ch === '*') {
+      if (line.startsWith('***', i)) {
+        const biMatch = line.slice(i).match(/^\*\*\*([^*\n]+)\*\*\*/);
+        if (biMatch) {
+          flushPlain();
+          tokens.push(...tokenizeLinksAndStickersInText(biMatch[1], 'bold_italic'));
+          i += biMatch[0].length;
+          continue;
+        }
+      }
+      if (line.startsWith('**', i)) {
+        const bMatch = line.slice(i).match(/^\*\*([^*\n]+)\*\*/);
+        if (bMatch) {
+          flushPlain();
+          tokens.push(...tokenizeLinksAndStickersInText(bMatch[1], 'bold'));
+          i += bMatch[0].length;
+          continue;
+        }
+      }
+      const itMatch = line.slice(i).match(/^\*([^*\n]+)\*/);
+      if (itMatch) {
+        flushPlain();
+        tokens.push(...tokenizeLinksAndStickersInText(itMatch[1], 'italic'));
+        i += itMatch[0].length;
+        continue;
+      }
+    }
+
+    plainBuffer += ch;
+    i++;
   }
 
-  if (lastIdx < line.length) {
-    tokens.push(...tokenizeLinksAndStickersInText(line.slice(lastIdx), 'text'));
-  }
-
+  flushPlain();
   return tokens;
 }
 
@@ -6531,8 +6656,11 @@ export function extractArgonSpeechText(
   );
   if (!withoutReceipts.trim()) return '';
 
-  // 1. Remove fenced code blocks
-  const withoutCodeBlocks = withoutReceipts.replace(/```[\s\S]*?```/g, ' ');
+  // 1. Remove line-start fenced code blocks using parseMessageSegments (never split on inline ` ``` `)
+  const withoutCodeBlocks = parseMessageSegments(withoutReceipts)
+    .filter((seg) => seg.type === 'text')
+    .map((seg) => seg.content)
+    .join(' ');
 
   const cleanSymbols = (input: string): string =>
     input

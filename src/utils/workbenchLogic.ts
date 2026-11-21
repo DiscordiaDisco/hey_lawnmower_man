@@ -43,6 +43,8 @@ import {
   extractSafeGeminiFunctionCalls,
   DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS,
   PERMISSIVE_GEMINI_SAFETY_SETTINGS,
+  withAllSafetySettingsOff,
+  resolveDefaultThinkingLevelForModel,
   inspectGeminiResponseBlockOrEmpty,
   buildRetryAdjustedBrainConfig,
   waitWithAbortSignal,
@@ -85,6 +87,8 @@ export {
   sniffMimeTypeFromBase64,
   DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS,
   PERMISSIVE_GEMINI_SAFETY_SETTINGS,
+  withAllSafetySettingsOff,
+  resolveDefaultThinkingLevelForModel,
   inspectGeminiResponseBlockOrEmpty,
   buildRetryAdjustedBrainConfig,
   waitWithAbortSignal,
@@ -822,13 +826,17 @@ export function saveCurioShelf(curios: CurioItem[]): CurioItem[] {
 // NATIVE THINKING CONFIG CONTROLS (gemini-4-argon / Gemini 3+ official specs)
 // ---------------------------------------------------------------------------
 export type ThinkingLevel = 'low' | 'medium' | 'high';
-export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'low';
-export const DEFAULT_THINKING_BUDGET = 1024; // Default low reasoning budget for gemini-4-argon
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium';
+export const DEFAULT_THINKING_BUDGET = 2048; // Default medium reasoning budget for gemini-4-argon / carbon / neon
+
+export function getDefaultThinkingLevelForModel(modelId?: string | null): ThinkingLevel {
+  return resolveDefaultThinkingLevelForModel(modelId);
+}
 
 let inMemoryThinkingLevelCache: ThinkingLevel | null = null;
 let inMemoryThinkingBudgetCache: number | null = null;
 
-export function loadThinkingLevel(): ThinkingLevel {
+export function loadThinkingLevel(modelId?: string | null): ThinkingLevel {
   if (inMemoryThinkingLevelCache !== null) {
     return inMemoryThinkingLevelCache;
   }
@@ -853,7 +861,7 @@ export function loadThinkingLevel(): ThinkingLevel {
   } catch {
     // ignore
   }
-  return DEFAULT_THINKING_LEVEL;
+  return modelId ? getDefaultThinkingLevelForModel(modelId) : DEFAULT_THINKING_LEVEL;
 }
 
 export function saveThinkingLevel(level: ThinkingLevel): ThinkingLevel {
@@ -4080,6 +4088,7 @@ export function mapWmoWeatherCode(code: number | null | undefined): string {
 export const ALLOWED_PRESET_MODELS = [
   'gemini-4-argon',
   'gemini-4-carbon',
+  'gemini-4-neon',
   'gemini-4-hydrogen',
   'gemini-3.1-pro-preview',
   'gemini-2.5-pro',
@@ -4088,7 +4097,7 @@ export const ALLOWED_PRESET_MODELS = [
 ] as const;
 
 /**
- * Normalizes a model ID while preserving 'gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen',
+ * Normalizes a model ID while preserving 'gemini-4-argon', 'gemini-4-carbon', 'gemini-4-neon', 'gemini-4-hydrogen',
  * 'gemini-3.1-pro-preview', 'gemini-2.5-pro', 'gemini-3.8-flash', and 'gemini-3.5-flash-lite'.
  * Defaults to 'gemini-4-argon'.
  */
@@ -4103,6 +4112,9 @@ export function normalizeModelId(modelId: string | null | undefined): string {
   }
   if (lower === 'gemini 4 carbon' || lower === 'gemini carbon') {
     return 'gemini-4-carbon';
+  }
+  if (lower === 'gemini 4 neon' || lower === 'gemini neon') {
+    return 'gemini-4-neon';
   }
   if (lower === 'gemini 4 hydrogen' || lower === 'gemini hydrogen') {
     return 'gemini-4-hydrogen';
@@ -6744,12 +6756,20 @@ export const BRAIN_ENGINE_OPTIONS: BrainEngineOption[] = [
     description: 'Official Gemini 4 Carbon deep-reasoning sovereign brain with native thinkingLevel (low/medium/high), temperature-omitted reasoning, and full Sanctuary house tools.',
   },
   {
+    id: 'gemini-4-neon',
+    label: 'gemini-4-neon (Gemini 4 Neon Sovereign Brain)',
+    shortBadge: '✨ gemini-4-neon',
+    provider: 'gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    description: 'Official Gemini 4 Neon sovereign brain with native thinkingLevel (medium default), temperature-omitted reasoning, and full Sanctuary house tools.',
+  },
+  {
     id: 'gemini-4-hydrogen',
     label: 'gemini-4-hydrogen (Fast Gemini 4 Multimodal Flash)',
     shortBadge: '⚡ gemini-4-hydrogen',
     provider: 'gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
-    description: 'Official Gemini 4 Hydrogen high-speed multimodal brain with native thinkingLevel, vision, audio, and full Sanctuary house tools.',
+    description: 'Official Gemini 4 Hydrogen high-speed multimodal brain with native thinkingLevel (high default), vision, audio, and full Sanctuary house tools.',
   },
   {
     id: 'gemini-3.1-pro-preview',
@@ -7568,6 +7588,7 @@ export async function runHybridGeminiPerceptionBridge(params: {
       const rawRes = await ai.models.generateContent({
         model: bridgeModel,
         contents: safeContents,
+        config: withAllSafetySettingsOff(),
       });
       const res = normalizeGeminiGenerateContentResult(rawRes);
       const text = extractSafeGeminiText(res).trim();
@@ -7748,6 +7769,7 @@ export async function generateContentWithAutoFallback(params: {
   const candidateModels = [
     'gemini-4-argon',
     'gemini-4-carbon',
+    'gemini-4-neon',
     'gemini-4-hydrogen',
     'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
@@ -7756,6 +7778,7 @@ export async function generateContentWithAutoFallback(params: {
   ];
   const explicitSpecialGemini =
     requestedModel === 'gemini-4-carbon' ||
+    requestedModel === 'gemini-4-neon' ||
     requestedModel === 'gemini-4-hydrogen' ||
     requestedModel === 'gemini-3.1-pro-preview' ||
     requestedModel === 'gemini-2.5-pro' ||
@@ -7791,7 +7814,7 @@ export async function generateContentWithAutoFallback(params: {
         ai,
         model: activeModel,
         contents: params.contents as any,
-        config: params.config,
+        config: withAllSafetySettingsOff(params.config),
         thinkingBudget,
         thinkingLevel: params.thinkingLevel,
       });
@@ -8407,9 +8430,9 @@ export async function runFlashWebScoutSearch(params: {
       const rawResponse = await ai.models.generateContent({
         model: flashModel,
         contents: [{ role: 'user', parts: [{ text: scoutPrompt }] }],
-        config: {
+        config: withAllSafetySettingsOff({
           tools: [{ googleSearch: {} }],
-        },
+        }),
       });
       const response = normalizeGeminiGenerateContentResult(rawResponse);
       const summary = extractSafeGeminiText(response).trim();
@@ -10455,7 +10478,7 @@ export async function runClientChatTurn(params: {
     abortSignal,
     onArgonEyeSnapshot,
     thinkingBudget = loadThinkingBudget(),
-    thinkingLevel = loadThinkingLevel(),
+    thinkingLevel = loadThinkingLevel(params.model),
     userTimeZone,
   } = params;
 
@@ -13437,14 +13460,14 @@ export async function runClientArgonTts(params: {
       const response = await ai.models.generateContent({
         model,
         contents: [{ parts: [{ text: ttsPromptPayload }] }],
-        config: {
+        config: withAllSafetySettingsOff({
           responseModalities: ['AUDIO'],
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: { voiceName },
             },
           },
-        },
+        }),
       });
       const inlineData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
       if (inlineData?.data) {
@@ -13911,9 +13934,9 @@ export async function runClientGramophoneMusicGenerator(params: {
         const stream = await ai.models.generateContentStream({
           model,
           contents: `Generate a 30-second atmospheric sanctuary track: ${cleanPrompt}`,
-          config: {
+          config: withAllSafetySettingsOff({
             responseModalities: ['AUDIO', 'TEXT'] as any,
-          },
+          }),
         });
         let audioBase64 = '';
         let lyrics = '';
@@ -14170,6 +14193,7 @@ export async function runClientImageGenerator(params: {
         const response = await ai.models.generateContent({
           model,
           contents: [{ parts: [{ text: finalPrompt }] }],
+          config: withAllSafetySettingsOff(),
         });
         const parts = response.candidates?.[0]?.content?.parts || [];
         for (const p of parts) {
@@ -14343,6 +14367,7 @@ export async function runClientAudioTranscribe(params: {
     const rawTranscribeRes = await ai.models.generateContent({
       model: 'gemini-3.5-transcribe',
       contents: sanitizeGeminiContents(contents),
+      config: withAllSafetySettingsOff(),
     });
     const transcribeRes = normalizeGeminiGenerateContentResult(rawTranscribeRes);
     const text = extractSafeGeminiText(transcribeRes).trim();
@@ -17498,9 +17523,9 @@ Keep the output structured, dense, and factual so a model reading this in place 
           ],
         },
       ],
-      config: {
+      config: withAllSafetySettingsOff({
         maxOutputTokens: 1024,
-      },
+      }),
     });
 
     clearTimeout(timer);

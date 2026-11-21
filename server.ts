@@ -29,6 +29,7 @@ import {
   ArgonAvatarMode,
   StaffAgent,
   normalizeModelId,
+  withAllSafetySettingsOff,
   ToolBadgeEvent,
   LorebookMap,
   ArgonJournalState,
@@ -463,6 +464,7 @@ async function runModelWithFallback(
       normalizeModelId(preferredModel),
       'gemini-4-argon',
       'gemini-4-carbon',
+      'gemini-4-neon',
       'gemini-4-hydrogen',
       'gemini-3.8-flash',
       'gemini-3.5-flash-lite',
@@ -476,10 +478,10 @@ async function runModelWithFallback(
       const result = await ai.models.generateContent({
         model: candidate,
         contents,
-        config: {
+        config: withAllSafetySettingsOff({
           systemInstruction,
           ...(withTools ? { tools: [{ functionDeclarations: lorebookFunctionDeclarations }] } : {}),
-        },
+        }),
       });
       return { result, modelUsed: candidate };
     } catch (err: unknown) {
@@ -2000,6 +2002,9 @@ async function startServer() {
         new Set([
           normalizeModelId(model || 'gemini-4-argon'),
           'gemini-4-argon',
+          'gemini-4-carbon',
+          'gemini-4-neon',
+          'gemini-4-hydrogen',
           'gemini-3.8-flash',
           'gemini-3.5-flash-lite',
           'gemini-2.5-pro',
@@ -2037,7 +2042,7 @@ async function startServer() {
             const result = await ai.models.generateContent({
               model: candidate,
               contents: [{ role: 'user', parts: [{ text: compressPrompt }] }],
-              config: {
+              config: withAllSafetySettingsOff({
                 systemInstruction: DEFAULT_ARGON_SYS_PROMPT,
                 responseMimeType: 'application/json',
                 responseSchema: {
@@ -2055,7 +2060,7 @@ async function startServer() {
                   },
                   required: ['title', 'summary'],
                 },
-              },
+              }),
             });
             rawCompressJson = (result.text || '').trim();
             modelUsed = candidate;
@@ -2131,7 +2136,7 @@ async function startServer() {
           const result = await ai.models.generateContent({
             model: candidate,
             contents: [{ role: 'user', parts: [{ text: writePrompt }] }],
-            config: {
+            config: withAllSafetySettingsOff({
               systemInstruction: DEFAULT_ARGON_SYS_PROMPT,
               responseMimeType: 'application/json',
               responseSchema: {
@@ -2154,7 +2159,7 @@ async function startServer() {
                 },
                 required: ['category', 'title', 'content'],
               },
-            },
+            }),
           });
           rawWriteJson = (result.text || '').trim();
           modelUsed = candidate;
@@ -2255,6 +2260,9 @@ async function startServer() {
         new Set([
           normalizeModelId(model || 'gemini-4-argon'),
           'gemini-4-argon',
+          'gemini-4-carbon',
+          'gemini-4-neon',
+          'gemini-4-hydrogen',
           'gemini-3.8-flash',
           'gemini-3.5-flash-lite',
           'gemini-2.5-pro',
@@ -2270,7 +2278,7 @@ async function startServer() {
           const result = await ai.models.generateContent({
             model: candidate,
             contents: [{ role: 'user', parts }],
-            config: {
+            config: withAllSafetySettingsOff({
               systemInstruction: whiteboardSystemInstruction,
               responseMimeType: 'application/json',
               responseSchema: {
@@ -2317,7 +2325,7 @@ async function startServer() {
                 },
                 required: ['reply', 'strokes'],
               },
-            },
+            }),
           });
           rawJson = (result.text || '').trim();
           modelUsed = candidate;
@@ -2401,14 +2409,14 @@ async function startServer() {
                 ],
               },
             ],
-            config: {
+            config: withAllSafetySettingsOff({
               responseModalities: ['AUDIO'],
               speechConfig: {
                 voiceConfig: {
                   prebuiltVoiceConfig: { voiceName: selectedVoice },
                 },
               },
-            },
+            }),
           });
 
           const inlineData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData;
@@ -2482,6 +2490,7 @@ async function startServer() {
                 },
               ],
             },
+            config: withAllSafetySettingsOff(),
           });
           transcribedText = (response.text || '').trim();
           if (transcribedText) break;
@@ -2551,6 +2560,9 @@ async function startServer() {
         new Set([
           normalizeModelId(model || 'gemini-4-argon'),
           'gemini-4-argon',
+          'gemini-4-carbon',
+          'gemini-4-neon',
+          'gemini-4-hydrogen',
           'gemini-3.8-flash',
           'gemini-3.5-flash-lite',
           'gemini-2.5-pro',
@@ -2566,7 +2578,7 @@ async function startServer() {
           const result = await ai.models.generateContent({
             model: candidate,
             contents: [{ role: 'user', parts: [{ text: chessPrompt }] }],
-            config: {
+            config: withAllSafetySettingsOff({
               systemInstruction: DEFAULT_ARGON_SYS_PROMPT,
               responseMimeType: 'application/json',
               responseSchema: {
@@ -2590,7 +2602,7 @@ async function startServer() {
                 },
                 required: ['from', 'to', 'banter'],
               },
-            },
+            }),
           });
           rawJson = (result.text || '').trim();
           modelUsed = candidate;
@@ -2685,6 +2697,9 @@ async function startServer() {
         new Set([
           normalizeModelId(model || 'gemini-4-argon'),
           'gemini-4-argon',
+          'gemini-4-carbon',
+          'gemini-4-neon',
+          'gemini-4-hydrogen',
           'gemini-3.8-flash',
           'gemini-3.5-flash-lite',
           'gemini-2.5-pro',
@@ -2700,7 +2715,7 @@ async function startServer() {
           const result = await ai.models.generateContent({
             model: candidate,
             contents: [{ role: 'user', parts: [{ text: cardPrompt }] }],
-            config: {
+            config: withAllSafetySettingsOff({
               systemInstruction: DEFAULT_ARGON_SYS_PROMPT,
               responseMimeType: 'application/json',
               responseSchema: {
@@ -2718,7 +2733,7 @@ async function startServer() {
                 },
                 required: ['decision', 'banter'],
               },
-            },
+            }),
           });
           rawJson = (result.text || '').trim();
           modelUsed = candidate;

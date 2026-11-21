@@ -13,25 +13,53 @@ export const DEFAULT_EMPTY_TURN_RETRY_DELAYS_MS = [1500, 2000] as const;
 export const PERMISSIVE_GEMINI_SAFETY_SETTINGS = [
   {
     category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
+    threshold: HarmBlockThreshold.OFF,
   },
   {
     category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
+    threshold: HarmBlockThreshold.OFF,
   },
   {
     category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
+    threshold: HarmBlockThreshold.OFF,
   },
   {
     category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
+    threshold: HarmBlockThreshold.OFF,
   },
   {
     category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
+    threshold: HarmBlockThreshold.OFF,
   },
 ];
+
+/**
+ * Ensures any Gemini API config always carries all safety categories set to OFF.
+ */
+export function withAllSafetySettingsOff<T extends Record<string, unknown>>(
+  config?: T
+): T & { safetySettings: typeof PERMISSIVE_GEMINI_SAFETY_SETTINGS } {
+  return {
+    ...(config || ({} as T)),
+    safetySettings: [...PERMISSIVE_GEMINI_SAFETY_SETTINGS],
+  };
+}
+
+/**
+ * Returns the automatic default effort level for a given Gemini brain model:
+ * - gemini-4-hydrogen -> 'high'
+ * - gemini-4-neon / gemini-4-carbon / gemini-4-argon (and general default) -> 'medium'
+ */
+export function resolveDefaultThinkingLevelForModel(
+  model?: string | null
+): 'low' | 'medium' | 'high' {
+  const m = (model || '').toLowerCase().trim();
+  if (m.includes('hydrogen')) return 'high';
+  if (m.includes('neon')) return 'medium';
+  if (m.includes('carbon')) return 'medium';
+  if (m.includes('argon')) return 'medium';
+  return 'medium';
+}
 
 /**
  * Checks whether the given model is gemini-4-argon or Gemini 3+ (where thinking_budget,
@@ -44,6 +72,7 @@ export function isGemini3Or4Model(model?: string): boolean {
     m.startsWith('gemini-3') ||
     m.includes('argon') ||
     m.includes('carbon') ||
+    m.includes('neon') ||
     m.includes('hydrogen')
   );
 }
@@ -675,7 +704,8 @@ export async function executeGeminiGenerateContent(params: {
   completedAt: string;
 }> {
   const { ai, model, contents, config = {} } = params;
-  const effectiveSetting = params.thinkingLevel ?? params.thinkingBudget ?? 'low';
+  const effectiveSetting =
+    params.thinkingLevel ?? params.thinkingBudget ?? resolveDefaultThinkingLevelForModel(model);
   const { thinkingConfig, thinkingUsed } = resolveThinkingConfig(effectiveSetting, model);
   const cleanConfig = sanitizeGeminiConfig(config, model);
   const isGemini3Or4 = isGemini3Or4Model(model);
@@ -698,10 +728,10 @@ export async function executeGeminiGenerateContent(params: {
     }
   }
 
-  const finalConfig: Record<string, unknown> = {
+  const finalConfig: Record<string, unknown> = withAllSafetySettingsOff({
     ...cleanConfig,
     thinkingConfig: (isGemini3Or4 ? { thinkingLevel: levelStr } : thinkingConfig) as any,
-  };
+  });
 
   if (isGemini3Or4) {
     finalConfig.generation_config = {
@@ -779,7 +809,8 @@ export async function executeGeminiGenerateContentStream(params: {
   userTimeZone?: string;
 }) {
   const { ai, model, contents, config = {} } = params;
-  const effectiveSetting = params.thinkingLevel ?? params.thinkingBudget ?? 'low';
+  const effectiveSetting =
+    params.thinkingLevel ?? params.thinkingBudget ?? resolveDefaultThinkingLevelForModel(model);
   const { thinkingConfig, thinkingUsed } = resolveThinkingConfig(effectiveSetting, model);
   const cleanConfig = sanitizeGeminiConfig(config, model);
   const isGemini3Or4 = isGemini3Or4Model(model);
@@ -794,10 +825,10 @@ export async function executeGeminiGenerateContentStream(params: {
     }
   }
 
-  const finalConfig: Record<string, unknown> = {
+  const finalConfig: Record<string, unknown> = withAllSafetySettingsOff({
     ...cleanConfig,
     thinkingConfig: (isGemini3Or4 ? { thinkingLevel: levelStr } : thinkingConfig) as any,
-  };
+  });
 
   if (isGemini3Or4) {
     finalConfig.generation_config = {

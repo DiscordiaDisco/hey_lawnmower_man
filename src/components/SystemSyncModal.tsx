@@ -36,6 +36,7 @@ import {
   ThinkingLevel,
   loadThinkingLevel,
   saveThinkingLevel,
+  getDefaultThinkingLevelForModel,
   UserPersona,
   DEFAULT_HEX_USER_PERSONA,
   PersonaCompletionStatus,
@@ -826,10 +827,10 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
                 <div>
                   <h3 className="text-sm sm:text-base font-bold text-[#f5ead8] flex items-center gap-2">
                     <span>🧠</span>
-                    <span>Gemini 4 Argon Thinking Level &amp; Reasoning</span>
+                    <span>Gemini 4 Thinking Level &amp; Reasoning</span>
                   </h3>
                   <p className="text-xs text-[#cbb693] font-mono leading-relaxed">
-                    Official Developer Guide specs: <code className="text-[#e6c88c]">thinking_budget</code> is deprecated and temperature/top_p/top_k are omitted in favor of <code className="text-[#e6c88c]">thinkingConfig: &#123; thinkingLevel: &quot;low&quot; | &quot;medium&quot; | &quot;high&quot; &#125;</code>.
+                    Official specs use <code className="text-[#e6c88c]">thinkingConfig: &#123; thinkingLevel: &quot;low&quot; | &quot;medium&quot; | &quot;high&quot; &#125;</code>. Auto-defaults on brain switch: Argon, Carbon &amp; Neon → <code className="text-[#e6c88c]">medium</code> · Hydrogen → <code className="text-[#e6c88c]">high</code>.
                   </p>
                 </div>
                 <div className="shrink-0">
@@ -841,52 +842,58 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
 
               {/* Official Thinking Level Selector */}
               <div className="grid grid-cols-3 gap-2 pt-1">
-                {[
-                  {
-                    id: 'low' as ThinkingLevel,
-                    label: 'Low',
-                    badge: '"low"',
-                    desc: 'Fast reasoning (~1K tokens)',
-                    budgetVal: 1024,
-                  },
-                  {
-                    id: 'medium' as ThinkingLevel,
-                    label: 'Medium (Default)',
-                    badge: '"medium"',
-                    desc: 'Balanced roleplay & tools (~2K tokens)',
-                    budgetVal: 2048,
-                  },
-                  {
-                    id: 'high' as ThinkingLevel,
-                    label: 'High',
-                    badge: '"high"',
-                    desc: 'Deep internal reasoning (~8K tokens)',
-                    budgetVal: 8192,
-                  },
-                ].map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    data-testid={`thinking-level-${preset.id}`}
-                    onClick={() => {
-                      setThinkingLevel(preset.id);
-                      saveThinkingLevel(preset.id);
-                      onChangeThinkingLevel?.(preset.id);
-                      setThinkingBudget(preset.budgetVal);
-                      saveThinkingBudget(preset.budgetVal);
-                      onChangeThinkingBudget?.(preset.budgetVal);
-                    }}
-                    className={`min-h-[48px] p-2 rounded-xl text-center border cursor-pointer transition-all ${
-                      thinkingLevel === preset.id
-                        ? 'bg-[#4a3420] border-[#ffd700] text-[#fff6e5] shadow-md ring-1 ring-[#ffd700]/50'
-                        : 'bg-[#180f14] border-[#6b5331]/40 text-[#cbb693] hover:border-[#c59b47]'
-                    }`}
-                  >
-                    <div className="font-bold font-serif text-xs">{preset.label}</div>
-                    <div className="text-[10px] opacity-80 font-mono text-[#ffd700]">{preset.badge}</div>
-                    <div className="text-[9px] opacity-70 font-mono mt-0.5">{preset.desc}</div>
-                  </button>
-                ))}
+                {(() => {
+                  const brainDefaultLevel = getDefaultThinkingLevelForModel(activeBrainModel);
+                  return [
+                    {
+                      id: 'low' as ThinkingLevel,
+                      label: 'Low',
+                      badge: '"low"',
+                      desc: 'Fast reasoning (~1K tokens)',
+                      budgetVal: 1024,
+                    },
+                    {
+                      id: 'medium' as ThinkingLevel,
+                      label: 'Medium',
+                      badge: '"medium"',
+                      desc: 'Balanced roleplay & tools (~2K tokens)',
+                      budgetVal: 2048,
+                    },
+                    {
+                      id: 'high' as ThinkingLevel,
+                      label: 'High',
+                      badge: '"high"',
+                      desc: 'Deep internal reasoning (~8K tokens)',
+                      budgetVal: 8192,
+                    },
+                  ].map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      data-testid={`thinking-level-${preset.id}`}
+                      onClick={() => {
+                        setThinkingLevel(preset.id);
+                        saveThinkingLevel(preset.id);
+                        onChangeThinkingLevel?.(preset.id);
+                        setThinkingBudget(preset.budgetVal);
+                        saveThinkingBudget(preset.budgetVal);
+                        onChangeThinkingBudget?.(preset.budgetVal);
+                      }}
+                      className={`min-h-[48px] p-2 rounded-xl text-center border cursor-pointer transition-all ${
+                        thinkingLevel === preset.id
+                          ? 'bg-[#4a3420] border-[#ffd700] text-[#fff6e5] shadow-md ring-1 ring-[#ffd700]/50'
+                          : 'bg-[#180f14] border-[#6b5331]/40 text-[#cbb693] hover:border-[#c59b47]'
+                      }`}
+                    >
+                      <div className="font-bold font-serif text-xs">
+                        {preset.label}
+                        {brainDefaultLevel === preset.id ? ' (Default)' : ''}
+                      </div>
+                      <div className="text-[10px] opacity-80 font-mono text-[#ffd700]">{preset.badge}</div>
+                      <div className="text-[9px] opacity-70 font-mono mt-0.5">{preset.desc}</div>
+                    </button>
+                  ));
+                })()}
               </div>
             </section>
 
@@ -972,7 +979,7 @@ export const SystemSyncModal: React.FC<SystemSyncModalProps> = ({
                 🧠 Brain &amp; Omni Router + API Key Vault
               </h3>
               <p className="text-xs text-[#cbb693] font-mono leading-relaxed break-words">
-                Switch Argon &amp; Staff anytime between <code className="text-[#e6c88c] break-words">gemini-4-argon</code>, <code className="text-[#e6c88c] break-words">gemini-4-carbon</code>, <code className="text-[#e6c88c] break-words">gemini-4-hydrogen</code>, <code className="text-[#e6c88c] break-words">gemini-3.8-pro</code>, <code className="text-[#e6c88c] break-words">gemini-3.8-flash</code>, <code className="text-[#e6c88c] break-words">gemini-omni-1.1-flash</code>, <code className="text-[#e6c88c] break-words">deepseek-chat</code> / <code className="text-[#e6c88c] break-words">deepseek-reasoner</code>, and <code className="text-[#e6c88c] break-words">glm-5</code> / <code className="text-[#e6c88c] break-words">kimi-k3</code> with full 15-tool translation &amp; automatic perception bridge.
+                Switch Argon &amp; Staff anytime between <code className="text-[#e6c88c] break-words">gemini-4-argon</code>, <code className="text-[#e6c88c] break-words">gemini-4-carbon</code>, <code className="text-[#e6c88c] break-words">gemini-4-neon</code>, <code className="text-[#e6c88c] break-words">gemini-4-hydrogen</code>, <code className="text-[#e6c88c] break-words">gemini-3.8-pro</code>, <code className="text-[#e6c88c] break-words">gemini-3.8-flash</code>, <code className="text-[#e6c88c] break-words">gemini-omni-1.1-flash</code>, <code className="text-[#e6c88c] break-words">deepseek-chat</code> / <code className="text-[#e6c88c] break-words">deepseek-reasoner</code>, and <code className="text-[#e6c88c] break-words">glm-5</code> / <code className="text-[#e6c88c] break-words">kimi-k3</code> with full 15-tool translation &amp; automatic perception bridge.
               </p>
             </div>
             <span className="px-2.5 py-1 rounded-full text-[10px] font-mono font-semibold bg-[#18120e] text-[#f0d8a8] border border-[#c59b47]/70 max-w-full truncate self-start">

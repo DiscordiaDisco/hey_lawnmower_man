@@ -203,6 +203,13 @@ import {
   lookupSessionModelToolReceipt,
   stripToolReceiptsFromVisibleText,
   extractAndStripToolReceipts,
+  getDefaultThinkingLevelForModel,
+  resolveDefaultThinkingLevelForModel,
+  loadThinkingLevel,
+  withAllSafetySettingsOff,
+  PERMISSIVE_GEMINI_SAFETY_SETTINGS,
+  executeGeminiGenerateContent,
+  executeGeminiGenerateContentStream,
 } from './workbenchLogic';
 
 test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => {
@@ -219,10 +226,11 @@ test('DEFAULT_ARGON_SYS_PROMPT includes core persona and Workbench laws', () => 
   );
 });
 
-test('normalizeModelId preserves real gemini-4-argon, gemini-4-carbon, and gemini-4-hydrogen model IDs and ALLOWED_PRESET_MODELS lists current flagship models', () => {
+test('normalizeModelId preserves real gemini-4-argon, gemini-4-carbon, gemini-4-neon, and gemini-4-hydrogen model IDs and ALLOWED_PRESET_MODELS lists current flagship models', () => {
   assert.deepEqual(ALLOWED_PRESET_MODELS, [
     'gemini-4-argon',
     'gemini-4-carbon',
+    'gemini-4-neon',
     'gemini-4-hydrogen',
     'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
@@ -232,8 +240,10 @@ test('normalizeModelId preserves real gemini-4-argon, gemini-4-carbon, and gemin
   assert.equal(DEFAULT_STAFF_AGENTS[0].model, 'gemini-3.8-flash');
   assert.equal(normalizeModelId('gemini-4-argon'), 'gemini-4-argon');
   assert.equal(normalizeModelId('gemini-4-carbon'), 'gemini-4-carbon');
+  assert.equal(normalizeModelId('gemini-4-neon'), 'gemini-4-neon');
   assert.equal(normalizeModelId('gemini-4-hydrogen'), 'gemini-4-hydrogen');
   assert.equal(normalizeModelId('gemini 4 carbon'), 'gemini-4-carbon');
+  assert.equal(normalizeModelId('gemini 4 neon'), 'gemini-4-neon');
   assert.equal(normalizeModelId('gemini 4 hydrogen'), 'gemini-4-hydrogen');
   assert.equal(normalizeModelId(''), 'gemini-4-argon');
   assert.equal(normalizeModelId('gemini-3.1-pro-preview'), 'gemini-3.1-pro-preview');
@@ -4879,4 +4889,126 @@ test('Markdown code-block parser ignores inline triple backticks (` ``` `), requ
   const utilitySnippet = appSource.slice(utilityBarIdx, utilityBarIdx + 350);
   assert.ok(utilitySnippet.includes('flex-wrap'), 'Header Row 2 utility bar must wrap cleanly on narrow mobile viewports');
 });
+
+test('gemini-4-neon is wired into Argon Primary Active Brain and effort defaults auto-switch per model (neon/carbon/argon -> medium, hydrogen -> high)', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+
+  // 1. Brain selector & router checks
+  const brainIds = BRAIN_ENGINE_OPTIONS.map((b) => b.id);
+  assert.ok(brainIds.includes('gemini-4-neon'));
+  assert.ok(ALLOWED_PRESET_MODELS.includes('gemini-4-neon'));
+  assert.equal(isGemini3Or4Model('gemini-4-neon'), true);
+  assert.equal(normalizeModelId('gemini-4-neon'), 'gemini-4-neon');
+  assert.equal(normalizeModelId('gemini neon'), 'gemini-4-neon');
+
+  const neonRoute = resolveBrainEngineRoute('gemini-4-neon');
+  assert.equal(neonRoute.provider, 'gemini');
+  assert.equal(neonRoute.model, 'gemini-4-neon');
+
+  // 2. Model default effort mapping
+  assert.equal(getDefaultThinkingLevelForModel('gemini-4-neon'), 'medium');
+  assert.equal(getDefaultThinkingLevelForModel('gemini-4-carbon'), 'medium');
+  assert.equal(getDefaultThinkingLevelForModel('gemini-4-argon'), 'medium');
+  assert.equal(getDefaultThinkingLevelForModel('gemini-4-hydrogen'), 'high');
+  assert.equal(resolveDefaultThinkingLevelForModel('gemini-4-neon'), 'medium');
+  assert.equal(resolveDefaultThinkingLevelForModel('gemini-4-hydrogen'), 'high');
+
+  // 3. App.tsx auto-switches effort level whenever active brain changes
+  const appSource = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+  const brainHandlerIdx = appSource.indexOf('const handleChangeActiveBrainModel =');
+  assert.ok(brainHandlerIdx !== -1);
+  const handlerSnippet = appSource.slice(brainHandlerIdx, brainHandlerIdx + 360);
+  assert.ok(handlerSnippet.includes('getDefaultThinkingLevelForModel(nextModel)'));
+  assert.ok(handlerSnippet.includes('handleChangeThinkingLevel(autoEffort)'));
+});
+
+test('All Gemini API calls (visible & background/hidden) enforce all 5 safety settings set to OFF', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { HarmBlockThreshold, HarmCategory } = await import('@google/genai');
+
+  // 1. PERMISSIVE_GEMINI_SAFETY_SETTINGS & withAllSafetySettingsOff cover all 5 categories with OFF
+  assert.equal(PERMISSIVE_GEMINI_SAFETY_SETTINGS.length, 5);
+  const categories = PERMISSIVE_GEMINI_SAFETY_SETTINGS.map((s) => s.category);
+  assert.ok(categories.includes(HarmCategory.HARM_CATEGORY_HARASSMENT));
+  assert.ok(categories.includes(HarmCategory.HARM_CATEGORY_HATE_SPEECH));
+  assert.ok(categories.includes(HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT));
+  assert.ok(categories.includes(HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT));
+  assert.ok(categories.includes(HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY));
+  for (const s of PERMISSIVE_GEMINI_SAFETY_SETTINGS) {
+    assert.equal(s.threshold, HarmBlockThreshold.OFF);
+  }
+
+  const wrapped = withAllSafetySettingsOff({ systemInstruction: 'test' });
+  assert.equal(wrapped.safetySettings.length, 5);
+  assert.ok(wrapped.safetySettings.every((s) => s.threshold === HarmBlockThreshold.OFF));
+
+  // 2. Runtime verification of executeGeminiGenerateContent & executeGeminiGenerateContentStream
+  const capturedConfigs: Array<Record<string, unknown>> = [];
+  const fakeAi = {
+    models: {
+      generateContent: async (args: any) => {
+        capturedConfigs.push(args.config);
+        return {
+          text: 'ok',
+          candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] } }],
+        };
+      },
+      generateContentStream: async (args: any) => {
+        capturedConfigs.push(args.config);
+        return (async function* () {
+          yield { candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] } }] };
+        })();
+      },
+    },
+  } as any;
+
+  const execRes = await executeGeminiGenerateContent({
+    ai: fakeAi,
+    model: 'gemini-4-neon',
+    contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+    config: { systemInstruction: 'sys' },
+  });
+  assert.equal(execRes.thinkingUsed, 'MEDIUM');
+
+  const hydrogenExecRes = await executeGeminiGenerateContent({
+    ai: fakeAi,
+    model: 'gemini-4-hydrogen',
+    contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+    config: { systemInstruction: 'sys' },
+  });
+  assert.equal(hydrogenExecRes.thinkingUsed, 'HIGH');
+
+  const streamRes = await executeGeminiGenerateContentStream({
+    ai: fakeAi,
+    model: 'gemini-4-neon',
+    contents: [{ role: 'user', parts: [{ text: 'hello stream' }] }],
+    config: { systemInstruction: 'sys' },
+  });
+  assert.equal(streamRes.thinkingUsed, 'MEDIUM');
+
+  assert.equal(capturedConfigs.length, 3);
+  for (const cfg of capturedConfigs) {
+    const safety = cfg.safetySettings as Array<{ threshold: string }>;
+    assert.ok(Array.isArray(safety) && safety.length === 5);
+    assert.ok(safety.every((s) => s.threshold === HarmBlockThreshold.OFF));
+  }
+
+  // 3. Exhaustive audit: every direct ai.models.generateContent / generateContentStream in workbenchLogic.ts and server.ts uses withAllSafetySettingsOff
+  for (const relPath of ['src/utils/workbenchLogic.ts', 'server.ts']) {
+    const src = fs.readFileSync(path.resolve(process.cwd(), relPath), 'utf-8');
+    const matches = [...src.matchAll(/ai\.models\.generateContent(?:Stream)?\s*\(/g)];
+    assert.ok(matches.length > 0, `Expected generateContent calls in ${relPath}`);
+    for (const m of matches) {
+      const idx = m.index ?? 0;
+      const callWindow = src.slice(idx, idx + 2200);
+      assert.ok(
+        callWindow.includes('withAllSafetySettingsOff'),
+        `${relPath} call at offset ${idx} is missing withAllSafetySettingsOff`
+      );
+    }
+  }
+});
+
 

@@ -175,6 +175,7 @@ import {
   ThinkingLevel,
   loadThinkingLevel,
   saveThinkingLevel,
+  getDefaultThinkingLevelForModel,
   normalizeThinkingLevel,
   compileSanctuaryLiveSyncPayload,
   extractSanctuaryLiveSyncPayload,
@@ -716,6 +717,8 @@ export default function App() {
     } catch {
       // ignore
     }
+    const autoEffort = getDefaultThinkingLevelForModel(nextModel);
+    handleChangeThinkingLevel(autoEffort);
   };
 
   const [staffBrainModel, setStaffBrainModel] = useState<string>(() => {
@@ -1050,13 +1053,25 @@ export default function App() {
 
   // Thinking Level state for gemini-4-argon & Gemini 3+ ("low" | "medium" | "high")
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() => {
-    return loadThinkingLevel();
+    const initialModel = selectedPresetModel === 'custom' ? customModelId : selectedPresetModel;
+    return loadThinkingLevel(initialModel);
   });
 
   // Thinking Budget state for Gemini reasoning effort (legacy/fine-tuning)
   const [thinkingBudget, setThinkingBudget] = useState<number>(() => {
-    const b = loadThinkingBudget();
-    return typeof b === 'number' ? b : 2048;
+    try {
+      if (
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem(STORAGE_KEYS.THINKING_BUDGET) !== null
+      ) {
+        return loadThinkingBudget();
+      }
+    } catch {
+      // ignore
+    }
+    const initialModel = selectedPresetModel === 'custom' ? customModelId : selectedPresetModel;
+    const defLvl = getDefaultThinkingLevelForModel(initialModel);
+    return defLvl === 'low' ? 1024 : defLvl === 'high' ? 8192 : 2048;
   });
 
   const handleChangeThinkingLevel = (val: ThinkingLevel) => {
